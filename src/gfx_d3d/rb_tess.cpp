@@ -586,18 +586,16 @@ void __cdecl RB_Vec3DirWorldToView(const GfxCmdBufSourceState *source, const flo
 
 void __cdecl RB_CreateParticleCloud2dAxis(const GfxParticleCloud *cloud, const float *viewUp, float (*viewAxis)[2][2])
 {
-    float viewAxisLength; // [esp+40h] [ebp-18h]
-
     iassert(cloud);
 
     if (viewUp[0] >= 0.001f || viewUp[1] >= 0.001f )
     {
-        (*viewAxis)[0][0] = -1.0f * viewUp[1]; // double check this! it was -(float)-1.0 before lol
-        (*viewAxis)[0][1] = -1.0f * *viewUp;
+        (*viewAxis)[0][0] = viewUp[1];
+        (*viewAxis)[0][1] = -viewUp[0];
         (*viewAxis)[1][0] = viewUp[0];
         (*viewAxis)[1][1] = viewUp[1];
 
-        viewAxisLength = Vec2Length((const float *)viewAxis);
+        float viewAxisLength = Vec2Length((const float *)viewAxis);
 
         iassert(viewAxisLength > 0);
         iassert(I_fabs(viewAxisLength - Vec2Length(&(*viewAxis)[1][0])) < EQUAL_EPSILON);
