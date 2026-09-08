@@ -901,12 +901,14 @@ int __cdecl R_DrawBModel(BModelDrawInfo *bmodelInfo, const GfxBrushModel *bmodel
     else
         visibleSurfaceCount = bmodel->surfaceCountNoDecal;
     iassert( visibleSurfaceCount );
-    startSurfPos = InterlockedExchangeAdd(&frontEndDataOut->surfPos, 8 * visibleSurfaceCount + 32);
-    if (8 * (uint32_t)visibleSurfaceCount + 32 + startSurfPos <= 0x20000)
+
+    const uint surfBytes = sizeof(BModelSurface) * visibleSurfaceCount + sizeof(GfxScaledPlacement);
+    startSurfPos = InterlockedExchangeAdd(&frontEndDataOut->surfPos, surfBytes);
+    if (surfBytes + startSurfPos <= sizeof(frontEndDataOut->surfsBuffer))
     {
         iassert( !(startSurfPos & 3) );
         newPlacement = (GfxScaledPlacement *)&frontEndDataOut->surfsBuffer[startSurfPos];
-        memcpy(&frontEndDataOut->surfsBuffer[startSurfPos], placement, 0x1Cu);
+        newPlacement->base = *placement;
         newPlacement->scale = 1.0;
         bmodelSurf = (BModelSurface *)&newPlacement[1];
         surfId = (char *)&newPlacement[1] - (char *)frontEndDataOut;

@@ -455,7 +455,7 @@ void __cdecl R_AddBModelSurfacesCamera(
             ++drawSurfs[region];
         }
         ++modelSurf;
-        surfId += 2;
+        surfId += (sizeof(BModelSurface) / sizeof(uint));
     }
 }
 
@@ -498,7 +498,7 @@ GfxDrawSurf *__cdecl R_AddBModelSurfaces(
 			++drawSurf;
         }
         ++modelSurf;
-        surfId += 2;
+        surfId += (sizeof(BModelSurface) / sizeof(uint));
     }
     return drawSurf;
 }
@@ -573,7 +573,7 @@ void __cdecl R_AddXModelSurfacesCamera(
             region = (*material)->cameraRegion;
             if (region == 3)
             {
-                surfId += 14;
+                surfId += (sizeof(GfxModelRigidSurface) / sizeof(uint));
                 ++modelSurf;
             }
             else
@@ -639,7 +639,7 @@ void __cdecl R_AddXModelSurfacesCamera(
                     v12 = R_GetXSurface((uint32_t *)modelSurf, surfType);
                     totalVertCount += XSurfaceGetNumVerts(v12);
                 }
-                surfId += 14;
+                surfId += (sizeof(GfxModelRigidSurface) / sizeof(uint));
                 ++modelSurf;
             }
         }
@@ -732,12 +732,12 @@ GfxDrawSurf *__cdecl R_AddXModelSurfaces(
                 //drawSurf->packed = newDrawSurf;
 
                 ++drawSurf;
-                surfId += 14;
+                surfId += (sizeof(GfxModelRigidSurface) / sizeof(uint));
                 ++modelSurf;
             }
             else
             {
-                surfId += 14;
+                surfId += (sizeof(GfxModelRigidSurface) / sizeof(uint));
                 ++modelSurf;
             }
         }
@@ -1110,9 +1110,9 @@ void __cdecl R_ClearScene(uint32_t localClientNum)
     iassert( rg.inFrame );
     iassert( Sys_IsMainThread() || Sys_IsRenderThread() );
     scene.dpvs.localClientNum = localClientNum;
-    Com_Memset((uint32_t *)scene.sceneDObj, 0, 124 * scene.sceneDObjCount);
-    Com_Memset((uint32_t *)&scene.sceneModel[0].info, 0, 72 * scene.sceneModelCount);
-    Com_Memset((uint32_t *)&scene.sceneBrush[0].info.surfId, 0, 40 * scene.sceneBrushCount);
+    Com_Memset(scene.sceneDObj, 0, sizeof(GfxSceneEntity) * scene.sceneDObjCount);
+    Com_Memset(scene.sceneModel, 0, sizeof(GfxSceneModel) * scene.sceneModelCount);
+    Com_Memset(scene.sceneBrush, 0, sizeof(GfxSceneBrush) * scene.sceneBrushCount);
     scene.addedLightCount = 0;
     memset((uint8_t *)scene.drawSurfCount, 0, sizeof(scene.drawSurfCount));
     for (viewIndex = 0; viewIndex < 7; ++viewIndex)

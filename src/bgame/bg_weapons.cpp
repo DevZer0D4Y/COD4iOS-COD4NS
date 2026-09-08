@@ -1657,7 +1657,7 @@ void __cdecl PM_Weapon_FinishWeaponChange(pmove_t *pm, bool quick)
     uint32_t oldweapon; // [esp+20h] [ebp-1Ch]
     uint32_t anim; // [esp+24h] [ebp-18h]
     uint32_t weapontime; // [esp+28h] [ebp-14h]
-    int *weapDef; // [esp+2Ch] [ebp-10h]
+    const WeaponDef *weapDef; // [esp+2Ch] [ebp-10h]
     playerState_s *ps; // [esp+30h] [ebp-Ch]
     bool firstequip; // [esp+34h] [ebp-8h]
     uint32_t newweapon; // [esp+38h] [ebp-4h]
@@ -1666,7 +1666,7 @@ void __cdecl PM_Weapon_FinishWeaponChange(pmove_t *pm, bool quick)
     iassert(ps);
     iassert(WEAPONSTATE_DROPPING(ps->weaponstate));
 
-    BG_GetWeaponDef(ps->weapon);
+    BG_GetWeaponDef(ps->weapon); // weird
     if (Mantle_IsWeaponInactive(ps))
     {
         newweapon = 0;
@@ -1707,7 +1707,7 @@ void __cdecl PM_Weapon_FinishWeaponChange(pmove_t *pm, bool quick)
 
     iassert(ps->weapon == newweapon);
 
-    weapDef = (int *)BG_GetWeaponDef(ps->weapon);
+    weapDef = BG_GetWeaponDef(ps->weapon);
     if (oldweapon == newweapon)
     {
         ps->weaponstate = WEAPON_READY;
@@ -1731,7 +1731,7 @@ void __cdecl PM_Weapon_FinishWeaponChange(pmove_t *pm, bool quick)
         }
         if (altswitch)
         {
-            weapontime = weapDef[236];
+            weapontime = weapDef->iAltRaiseTime;
             if (ps->aimSpreadScale >= 128.0)
                 aimspread = ps->aimSpreadScale;
             else
@@ -1744,22 +1744,22 @@ void __cdecl PM_Weapon_FinishWeaponChange(pmove_t *pm, bool quick)
             if (PM_WeaponClipEmpty(ps))
             {
                 anim = 22;
-                weapontime = weapDef[240];
+                weapontime = weapDef->iEmptyRaiseTime;
             }
             else if (firstequip)
             {
                 anim = 12;
-                weapontime = weapDef[239];
+                weapontime = weapDef->iFirstRaiseTime;
             }
             else if (quick)
             {
                 anim = 20;
-                weapontime = weapDef[238];
+                weapontime = weapDef->quickRaiseTime;
             }
             else
             {
                 anim = 11;
-                weapontime = weapDef[234];
+                weapontime = weapDef->iRaiseTime;
             }
             if (oldweapon)
             {
@@ -1775,8 +1775,8 @@ void __cdecl PM_Weapon_FinishWeaponChange(pmove_t *pm, bool quick)
         PM_Weapon_BeginWeaponRaise(ps, anim, weapontime, aimspread, altswitch);
 #ifdef KISAK_MP
         iassert(weapDef);
-        BG_SetConditionBit(ps->clientNum, ANIM_COND_PLAYERANIMTYPE, weapDef[74]);
-        BG_SetConditionBit(ps->clientNum, ANIM_COND_WEAPONCLASS, weapDef[76]);
+        BG_SetConditionBit(ps->clientNum, ANIM_COND_PLAYERANIMTYPE, weapDef->playerAnimType);
+        BG_SetConditionBit(ps->clientNum, ANIM_COND_WEAPONCLASS, weapDef->weapClass);
 #endif
         BG_TakeClipOnlyWeaponIfEmpty(ps, oldweapon);
     }
