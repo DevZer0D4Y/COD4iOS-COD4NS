@@ -179,15 +179,15 @@ void __cdecl Con_GetTextCopy(char *text, int32_t maxSize)
 
 void __cdecl Con_TimeJumped(int32_t localClientNum, int32_t serverTime)
 {
-    uint32_t gameWindowIndex; // [esp+0h] [ebp-4h]
-
     Con_ResetMessageWindowTimes(&con.consoleWindow, serverTime);
-    for (gameWindowIndex = 0; gameWindowIndex < 4; ++gameWindowIndex)
-        Con_ResetMessageWindowTimes(
-            (MessageWindow *)&con.color[4630 * localClientNum - 2582 + 13 * gameWindowIndex],
-            serverTime);
-    Con_ResetMessageWindowTimes((MessageWindow *)&con.color[4630 * localClientNum - 1122], serverTime);
-    Con_ResetMessageWindowTimes((MessageWindow *)&con.color[4630 * localClientNum - 53], serverTime);
+
+    for (uint gameWindowIndex = 0; gameWindowIndex < 4; ++gameWindowIndex)
+    {
+        Con_ResetMessageWindowTimes(&con.messageBuffer[localClientNum].gamemsgWindows[gameWindowIndex], serverTime);
+    }
+
+    Con_ResetMessageWindowTimes(&con.messageBuffer[localClientNum].miniconWindow, serverTime);
+    Con_ResetMessageWindowTimes(&con.messageBuffer[localClientNum].errorWindow, serverTime);
 }
 
 void __cdecl Con_ResetMessageWindowTimes(MessageWindow *msgwnd, int32_t serverTime)
@@ -215,16 +215,14 @@ void __cdecl Con_ResetMessageWindowTimes(MessageWindow *msgwnd, int32_t serverTi
 #ifdef KISAK_MP
 void __cdecl Con_TimeNudged(int32_t localClientNum, int32_t serverTimeNudge)
 {
-    uint32_t gameWindowIndex; // [esp+0h] [ebp-8h]
-    int32_t serverTime; // [esp+4h] [ebp-4h]
-
-    serverTime = CL_GetLocalClientGlobals(localClientNum)->serverTime;
+    int serverTime = CL_GetLocalClientGlobals(localClientNum)->serverTime;
     Con_NudgeMessageWindowTimes(&con.consoleWindow, serverTimeNudge, serverTime);
-    for (gameWindowIndex = 0; gameWindowIndex < 4; ++gameWindowIndex)
-        Con_NudgeMessageWindowTimes(
-            (MessageWindow *)&con.color[4630 * localClientNum - 2582 + 13 * gameWindowIndex],
-            serverTimeNudge,
-            serverTime);
+
+    for (uint gameWindowIndex = 0; gameWindowIndex < 4; ++gameWindowIndex)
+    {
+        Con_NudgeMessageWindowTimes(&con.messageBuffer[localClientNum].gamemsgWindows[gameWindowIndex], serverTimeNudge, serverTime);
+    }
+
     Con_NudgeMessageWindowTimes((MessageWindow *)&con.color[4630 * localClientNum - 1122], serverTimeNudge, serverTime);
     Con_NudgeMessageWindowTimes((MessageWindow *)&con.color[4630 * localClientNum - 53], serverTimeNudge, serverTime);
 }
@@ -270,10 +268,10 @@ void __cdecl Con_NudgeMessageWindowTimes(MessageWindow *msgwnd, int32_t serverTi
 
 void __cdecl Con_ClearNotify(int32_t localClientNum)
 {
-    uint32_t gameWindowIndex; // [esp+0h] [ebp-4h]
-
-    for (gameWindowIndex = 0; gameWindowIndex < 4; ++gameWindowIndex)
-        Con_ClearMessageWindow((MessageWindow *)&con.color[4630 * localClientNum - 2582 + 13 * gameWindowIndex]);
+    for (uint gameWindowIndex = 0; gameWindowIndex < 4; ++gameWindowIndex)
+    {
+        Con_ClearMessageWindow(&con.messageBuffer[localClientNum].gamemsgWindows[gameWindowIndex]);
+    }
 }
 
 void __cdecl Con_ClearMessageWindow(MessageWindow *msgwnd)
@@ -289,7 +287,7 @@ void __cdecl Con_ClearMessageWindow(MessageWindow *msgwnd)
 
 void __cdecl Con_ClearErrors(int32_t localClientNum)
 {
-    Con_ClearMessageWindow((MessageWindow *)&con.color[4630 * localClientNum - 53]);
+    Con_ClearMessageWindow(&con.messageBuffer[localClientNum].errorWindow);
 }
 
 void __cdecl Con_CheckResize()
@@ -1041,12 +1039,12 @@ MessageWindow *__cdecl Con_GetDestWindow(int32_t localClientNum, print_msg_dest_
     case CON_DEST_CONSOLE:
         return &con.consoleWindow;
     case CON_DEST_MINICON:
-        return (MessageWindow *)&con.color[4630 * localClientNum - 1122];
+        return &con.messageBuffer[localClientNum].miniconWindow;
     case CON_DEST_ERROR:
-        return (MessageWindow *)&con.color[4630 * localClientNum - 53];
+        return &con.messageBuffer[localClientNum].errorWindow;
     }
     iassert(dest >= CON_DEST_GAME_FIRST && dest <= CON_DEST_GAME_LAST);
-    return (MessageWindow *)&con.color[4630 * localClientNum - 2621 + 13 * dest];
+    return &con.messageBuffer[localClientNum].gamemsgWindows[dest - CON_DEST_GAME_FIRST];
 }
 
 void __cdecl Con_UpdateNotifyLine(int32_t localClientNum, uint32_t channel, bool lineFeed, int32_t flags)
@@ -1726,7 +1724,7 @@ void __cdecl Con_DrawGameMessageWindow(
         bcassert(windowIndex, GAMEMSG_WINDOW_COUNT); // 4
         Con_DrawMessageWindow(
             localClientNum,
-            (MessageWindow *)&con.color[4630 * localClientNum - 2582 + 13 * windowIndex],
+            &con.messageBuffer[localClientNum].gamemsgWindows[windowIndex],
             xPos,
             yPos,
             SnapFloatToInt(fontScale * 48.0f),
@@ -2260,7 +2258,7 @@ void __cdecl Con_DrawMiniConsole(int32_t localClientNum, int32_t xPos, int32_t y
     color[3] = alpha;
     Con_DrawMessageWindow(
         localClientNum,
-        (MessageWindow *)&con.color[4630 * localClientNum - 1122],
+        &con.messageBuffer[localClientNum].miniconWindow,
         xPos,
         yPos,
         12,
@@ -2276,7 +2274,7 @@ void __cdecl Con_DrawMiniConsole(int32_t localClientNum, int32_t xPos, int32_t y
 
 void __cdecl Con_ClearMiniConsole(int32_t localClientNum)
 {
-    Con_ClearMessageWindow((MessageWindow *)&con.color[4630 * localClientNum - 1122]);
+    Con_ClearMessageWindow(&con.messageBuffer[localClientNum].miniconWindow);
 }
 
 void __cdecl Con_DrawErrors(int32_t localClientNum, int32_t xPos, int32_t yPos, float alpha)
@@ -2291,7 +2289,7 @@ void __cdecl Con_DrawErrors(int32_t localClientNum, int32_t xPos, int32_t yPos, 
     color[3] = alpha;
     Con_DrawMessageWindow(
         localClientNum,
-        (MessageWindow *)&con.color[4630 * localClientNum - 53],
+        &con.messageBuffer[localClientNum].errorWindow,
         xPos,
         yPos,
         12,
