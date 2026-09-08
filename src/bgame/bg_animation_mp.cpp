@@ -1212,23 +1212,20 @@ bool __cdecl BG_IsKnifeMeleeAnim(const clientInfo_t *ci, int32_t animNum)
 
 void __cdecl BG_LerpOffset(float *offset_goal, float maxOffsetChange, float *offset)
 {
-    float diff[3] = { 0 }; // [esp+20h] [ebp-10h] BYREF
-    int error = 0; // [esp+2Ch] [ebp-4h]
+    float diff[3];
 
     Vec3Sub(offset_goal, offset, diff);
-    *(float *)&error = Vec3LengthSq(diff);
-    if (*(float *)&error != 0.0)
+    float error = Vec3LengthSq(diff);
+    if (error != 0.0)
     {
-        *(float *)&error = I_rsqrt(error) * maxOffsetChange;
-        if (*(float *)&error >= 1.0)
+        error = I_rsqrt(error) * maxOffsetChange;
+        if (error >= 1.0)
         {
-            *offset = *offset_goal;
-            offset[1] = offset_goal[1];
-            offset[2] = offset_goal[2];
+            Vec3Copy(offset_goal, offset);
         }
         else
         {
-            Vec3Mad(offset, *(float *)&error, diff, offset);
+            Vec3Mad(offset, error, diff, offset);
         }
     }
 }
