@@ -1715,9 +1715,9 @@ void __cdecl ScrCmd_PlaySoundToTeam(scr_entref_t entref)
         Scr_Error(va("Illegal team string '%s'. Must be allies, or axis.", SL_ConvertToString(team)));
     }
     if (team == scr_const.allies)
-        teamNum = 2;
+        teamNum = TEAM_ALLIES;
     else
-        teamNum = 1;
+        teamNum = TEAM_AXIS;
     if (Scr_GetNumParam() >= 3)
     {
         ignoreClientEnt = Scr_GetEntity(2);
@@ -2209,7 +2209,7 @@ void __cdecl ClearObjective(objective_t *obj)
     obj->origin[1] = 0.0;
     obj->origin[2] = 0.0;
     obj->entNum = ENTITYNUM_NONE;
-    obj->teamNum = 0;
+    obj->teamNum = TEAM_FREE;
     obj->icon = 0;
 }
 
@@ -2251,7 +2251,7 @@ void Scr_Objective_Add()
         if (numParam >= 4)
             SetObjectiveIcon(obj, 3u);
     }
-    obj->teamNum = 0;
+    obj->teamNum = TEAM_FREE;
 }
 
 void __cdecl ClearObjective_OnEntity(objective_t *obj)
@@ -2427,15 +2427,15 @@ void GScr_Objective_Team()
     team = Scr_GetConstString(1);
     if (team == scr_const.allies)
     {
-        obj->teamNum = 2;
+        obj->teamNum = TEAM_ALLIES;
     }
     else if (team == scr_const.axis)
     {
-        obj->teamNum = 1;
+        obj->teamNum = TEAM_AXIS;
     }
     else if (team == scr_const.none)
     {
-        obj->teamNum = 0;
+        obj->teamNum = TEAM_FREE;
     }
     else
     {
@@ -4747,9 +4747,9 @@ void GScr_GetTeamScore()
         Scr_Error(va("Illegal team string '%s'. Must be allies, or axis.", SL_ConvertToString(team)));
     }
     if (team == scr_const.allies)
-        Scr_AddInt(level.teamScores[2]);
+        Scr_AddInt(level.teamScores[TEAM_ALLIES]);
     else
-        Scr_AddInt(level.teamScores[1]);
+        Scr_AddInt(level.teamScores[TEAM_AXIS]);
 }
 
 void GScr_SetTeamScore()
@@ -4766,12 +4766,12 @@ void GScr_SetTeamScore()
     teamScore = Scr_GetInt(1);
     if (team == scr_const.allies)
     {
-        level.teamScores[2] = teamScore;
+        level.teamScores[TEAM_ALLIES] = teamScore;
         v2 = va("%c %i", 72, teamScore);
     }
     else
     {
-        level.teamScores[1] = teamScore;
+        level.teamScores[TEAM_AXIS] = teamScore;
         v2 = va("%c %i", 71, teamScore);
     }
     SV_GameSendServerCommand(-1, SV_CMD_CAN_IGNORE, v2);
@@ -4839,9 +4839,9 @@ void GScr_GetTeamPlayersAlive()
         Scr_Error(va("Illegal team string '%s'. Must be allies, or axis.", SL_ConvertToString(team)));
     }
     if (team == scr_const.allies)
-        iTeamNum = 2;
+        iTeamNum = TEAM_ALLIES;
     else
-        iTeamNum = 1;
+        iTeamNum = TEAM_AXIS;
     iLivePlayers = 0;
     for (i = 0; i < g_maxclients->current.integer; ++i)
     {
@@ -5852,15 +5852,15 @@ void __cdecl GScr_SetTeamForTrigger(scr_entref_t entref)
     team = Scr_GetConstString(0);
     if (team == scr_const.allies)
     {
-        ent->team = 2;
+        ent->team = TEAM_ALLIES;
     }
     else if (team == scr_const.axis)
     {
-        ent->team = 1;
+        ent->team = TEAM_AXIS;
     }
     else if (team == scr_const.none)
     {
-        ent->team = 0;
+        ent->team = TEAM_FREE;
     }
     else
     {
@@ -5986,18 +5986,18 @@ bool GScr_SetTeamRadar()
     if (team == scr_const.allies)
     {
         result = radarAvailable;
-        level.teamHasRadar[2] = radarAvailable;
+        level.teamHasRadar[TEAM_ALLIES] = radarAvailable;
     }
     else if (team == scr_const.axis)
     {
         result = radarAvailable;
-        level.teamHasRadar[1] = radarAvailable;
+        level.teamHasRadar[TEAM_AXIS] = radarAvailable;
     }
     else
     {
         iassert(team == scr_const.none);
         result = radarAvailable;
-        level.teamHasRadar[0] = radarAvailable;
+        level.teamHasRadar[TEAM_FREE] = radarAvailable;
     }
     return result;
 }
@@ -6010,11 +6010,11 @@ void GScr_GetTeamRadar()
     team = Scr_GetConstString(0);
     if (team == scr_const.allies)
     {
-        radarAvailable = level.teamHasRadar[2];
+        radarAvailable = level.teamHasRadar[TEAM_ALLIES];
     }
     else if (team == scr_const.axis)
     {
-        radarAvailable = level.teamHasRadar[1];
+        radarAvailable = level.teamHasRadar[TEAM_AXIS];
     }
     else
     {
@@ -6023,7 +6023,7 @@ void GScr_GetTeamRadar()
             Scr_ParamError(0, va("Illegal team string '%s'. Must be allies, axis, or none.", SL_ConvertToString(team)));
             return;
         }
-        radarAvailable = level.teamHasRadar[0];
+        radarAvailable = level.teamHasRadar[TEAM_FREE];
     }
     Scr_AddInt(radarAvailable);
 }
