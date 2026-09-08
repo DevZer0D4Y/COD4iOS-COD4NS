@@ -358,7 +358,7 @@ void __cdecl Actor_FaceLikelyEnemyPath(actor_s *self, ai_orient_t *pOrient)
 
     if (self->faceLikelyEnemyPathNeedCheckTime <= level.time)
     {
-        if ((unsigned __int8)Actor_GetAnglesToLikelyEnemyPath(self))
+        if (Actor_GetAnglesToLikelyEnemyPath(self))
         {
             Actor_SetDesiredAngles(pOrient, self->anglesToLikelyEnemyPath[0], self->anglesToLikelyEnemyPath[1]);
         }

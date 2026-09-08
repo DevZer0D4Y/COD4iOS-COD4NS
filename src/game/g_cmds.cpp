@@ -903,7 +903,7 @@ void Cmd_VisionSetNaked_f()
     if (sv_cmd_args.argc[nesting] <= 1)
         v5 = "";
     else
-        v5 = (const char *)*((unsigned int *)sv_cmd_args.argv[nesting] + 1);
+        v5 = sv_cmd_args.argv[nesting][1];
     SV_SetConfigstring(CS_VISIONSET_NAKED, va("\"%s\" %i", v5, v7));
 }
 
@@ -959,7 +959,7 @@ void Cmd_VisionSetNight_f()
     if (sv_cmd_args.argc[nesting] <= 1)
         v5 = "";
     else
-        v5 = (const char *)*((unsigned int *)sv_cmd_args.argv[nesting] + 1);
+        v5 = sv_cmd_args.argv[nesting][1];
     SV_SetConfigstring(CS_VISIONSET_NIGHT, va("\"%s\" %i", v5, v7));
 }
 

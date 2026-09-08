@@ -679,7 +679,7 @@ int32_t Scr_PrecacheModel();
 void Scr_PrecacheShellShock();
 void Scr_PrecacheItem();
 int32_t Scr_PrecacheShader();
-char *Scr_PrecacheString();
+void Scr_PrecacheString();
 void Scr_AmbientPlay();
 void Scr_AmbientStop();
 void Scr_GrenadeExplosionEffect();

@@ -205,58 +205,24 @@ int __cdecl compare_sentient_sort(unsigned int *pe1, unsigned int *pe2)
 
 void __cdecl Actor_UpdateLastKnownPos(actor_s *self, sentient_s *other)
 {
-    sentient_s *sentients; // r11
-    char *v5; // r11
-    char *v6; // r31
-
-    if (!self)
-        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp", 743, 0, "%s", "self");
-    if (!other)
-        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp", 744, 0, "%s", "other");
-    sentients = level.sentients;
-    if (other < level.sentients || other >= &level.sentients[33])
-    {
-        MyAssertHandler(
-            "c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp",
-            745,
-            0,
-            "%s",
-            "other >= level.sentients && other < level.sentients + MAX_SENTIENTS");
-        sentients = level.sentients;
-    }
-    if (other != &sentients[other - sentients])
-    {
-        MyAssertHandler(
-            "c:\\trees\\cod3\\cod3src\\src\\game\\actor_senses.cpp",
-            746,
-            0,
-            "%s",
-            "other == level.sentients + (other - level.sentients)");
-        sentients = level.sentients;
-    }
-    v5 = (char *)self + 40 * (other - sentients);
-    v6 = v5 + 2100;
-    *((unsigned int *)v5 + 529) = level.time;
-    Sentient_GetOrigin(other, (float *)v5 + 531);
-    *((unsigned int *)v6 + 9) = (unsigned int)other->pNearestNode;
+    iassert(self);
+    iassert(other >= level.sentients && other < level.sentients + MAX_SENTIENTS);
+    sentient_info_t *info = &self->sentientInfo[other - level.sentients];
+    info->lastKnownPosTime = level.time;
+    Sentient_GetOrigin(other, info->vLastKnownPos);
+    info->pLastKnownNode = other->pNearestNode;
 }
 
 void __cdecl Actor_UpdateLastEnemySightPos(actor_s *self)
 {
-    const sentient_s *TargetSentient; // r3
-    char *v3; // r11
-
-    TargetSentient = Actor_GetTargetSentient(self);
-    if (TargetSentient)
+    const sentient_s *target = Actor_GetTargetSentient(self);
+    if (target)
     {
-        v3 = (char *)self + 40 * (TargetSentient - level.sentients);
-        if (v3[2100])
+        const sentient_info_t *info = &self->sentientInfo[target - level.sentients];
+        if (info->VisCache.bVisible && info->VisCache.iLastVisTime == level.time)
         {
-            if (*((unsigned int *)v3 + 527) == level.time)
-            {
-                self->lastEnemySightPosValid = 1;
-                Sentient_GetEyePosition(TargetSentient, self->lastEnemySightPos);
-            }
+            self->lastEnemySightPosValid = 1;
+            Sentient_GetEyePosition(target, self->lastEnemySightPos);
         }
     }
 }

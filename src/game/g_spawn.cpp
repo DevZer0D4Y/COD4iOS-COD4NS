@@ -1055,8 +1055,8 @@ void __cdecl Scr_SetGenericField(unsigned __int8 *b, fieldtype_t type, int ofs)
     switch (type)
     {
     case F_INT:
-        Int = (gentity_s *)Scr_GetInt(0);
-        goto LABEL_20;
+        *(int *)&b[ofs] = Scr_GetInt(0);
+        return;
     case F_SHORT:
         *(_WORD *)&b[ofs] = Scr_GetInt(0);
         return;

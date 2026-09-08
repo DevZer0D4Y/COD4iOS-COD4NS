@@ -6915,7 +6915,7 @@ void GScr_ChangeLevel()
     long double v5; // fp2
     long double v6; // fp2
 
-    v0 = G_Find(0, 284, scr_const.player);
+    v0 = G_Find(0, offsetof(gentity_s, classname), scr_const.player);
     if (!v0)
         MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_scr_main.cpp", 7856, 0, "%s", "player");
     if (v0->health > 0 && !g_reloading->current.integer)
@@ -6959,7 +6959,7 @@ void GScr_MissionFailed()
 {
     gentity_s *v0; // r3
 
-    v0 = G_Find(0, 284, scr_const.player);
+    v0 = G_Find(0, offsetof(gentity_s, classname), scr_const.player);
     if (v0)
     {
         respawn(v0);

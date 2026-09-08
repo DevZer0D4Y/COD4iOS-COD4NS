@@ -320,7 +320,7 @@ void __cdecl G_InitGame(int32_t levelTime, int32_t randomSeed, int32_t restart, 
     level.num_entities = 72;
     level.firstFreeEnt = 0;
     level.lastFreeEnt = 0;
-    SV_LocateGameData(level.gentities, level.num_entities, 628, &level.clients->ps, 12676);
+    SV_LocateGameData(level.gentities, level.num_entities, sizeof(gentity_s), &level.clients->ps, sizeof(gclient_s));
 
     G_ParseHitLocDmgTable();
     BG_LoadPenetrationDepthTable();

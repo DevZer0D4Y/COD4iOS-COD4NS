@@ -614,24 +614,18 @@ void __cdecl Scr_Target_ClearLockOn()
 
 int __cdecl GetTargetIdx(const gentity_s *ent)
 {
-    int v1; // r9
-    TargetGlob *v2; // r11
-    unsigned int v3; // r10
-
-    if (!ent)
-        return 32;
-    v1 = 0;
-    v2 = &targGlob;
-    v3 = 0;
-    while (v2->targets[0].ent != ent)
+    if (ent)
     {
-        v3 += 28;
-        ++v1;
-        v2 = (TargetGlob *)((char *)v2 + 28);
-        if (v3 >= 0x380)
-            return 32;
+        for (int i = 0; i < ARRAY_COUNT(targGlob.targets); ++i)
+        {
+            if (targGlob.targets[i].ent == ent)
+            {
+                return i;
+            }
+        }
     }
-    return v1;
+
+    return ARRAY_COUNT(targGlob.targets);
 }
 
 int __cdecl G_TargetGetOffset(const gentity_s *targ, float *result)

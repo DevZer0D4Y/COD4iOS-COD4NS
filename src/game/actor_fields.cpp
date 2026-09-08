@@ -151,11 +151,11 @@ unsigned __int8 *__cdecl BaseForFields(unsigned __int8 *actor, const actor_field
     {
         if (fields == sentientfields)
         {
-            return (unsigned __int8 *)*((unsigned int *)actor + 1);
+            return (unsigned __int8 *)((actor_s *)actor)->sentient;
         }
         else if (fields == entfields)
         {
-            return *(unsigned __int8 **)actor;
+            return (unsigned __int8 *)((actor_s *)actor)->ent;
         }
         else
         {
@@ -312,53 +312,36 @@ void __cdecl ActorScr_SetGoalHeight(actor_s *pSelf, const actor_fields_s *pField
 
 void __cdecl ActorScr_SetTime(actor_s *pSelf, const actor_fields_s *pField)
 {
-    long double v4; // fp2
-    long double v5; // fp2
+    iassert(pSelf);
+    iassert(pField);
+    iassert(pField->type == F_INT);
 
-    if (!pSelf)
-        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 396, 0, "%s", "pSelf");
-    if (!pField)
-        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 399, 0, "%s", "pField");
-    if (pField->type)
-        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 401, 0, "%s", "pField->type == F_INT");
-    *(double *)&v4 = (float)((float)(Scr_GetFloat(0) * (float)1000.0) + (float)0.5);
-    v5 = floor(v4);
-    *(gentity_s **)((char *)&pSelf->ent + pField->ofs) = (gentity_s *)(int)(float)*(double *)&v5;
+    float milliseconds = Scr_GetFloat(0) * 1000.0f;
+    *(int *)((char *)pSelf + pField->ofs) = (int)floorf(milliseconds + 0.5f);
 }
 
 void __cdecl ActorScr_GetTime(actor_s *pSelf, const actor_fields_s *pField)
 {
-    __int64 v2; // r11
+    iassert(pSelf);
+    iassert(pField);
+    iassert(pField->type == F_INT);
 
-    if (!pField)
-        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 414, 0, "%s", "pField");
-    if (pField->type)
-        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 415, 0, "%s", "pField->type == F_INT");
-    //LODWORD(v2) = *(gentity_s **)((char *)&pSelf->ent + pField->ofs);
-    //Scr_AddFloat((float)((float)v2 * (float)0.001));
-    Scr_AddFloat((float)*(int *)((char *)&pSelf->ent + pField->ofs) * 0.001);
+    int milliseconds = *(const int *)((const char *)pSelf + pField->ofs);
+    Scr_AddFloat((float)milliseconds * 0.001);
 }
 
 void __cdecl ActorScr_SetWeapon(actor_s *pSelf, const actor_fields_s *pField)
 {
-    const char *String; // r31
-    const char *v5; // r3
-    const char *v6; // r3
+    iassert(pSelf);
+    iassert(pField);
+    iassert(pField->type == F_INT);
 
-    if (!pSelf)
-        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 430, 0, "%s", "pSelf");
-    if (!pField)
-        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 433, 0, "%s", "pField");
-    if (pField->type)
-        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 435, 0, "%s", "pField->type == F_INT");
-    String = Scr_GetString(0);
+    const char *String = Scr_GetString(0);
     if (!G_GetWeaponIndexForName(String))
     {
-        v5 = va("Can't find weapon [%s].  It probably needs to be precached.", String);
-        Scr_ParamError(0, v5);
+        Scr_ParamError(0, va("Can't find weapon [%s].  It probably needs to be precached.", String));
     }
-    v6 = Scr_GetString(0);
-    *(gentity_s **)((char *)&pSelf->ent + pField->ofs) = (gentity_s *)G_GetWeaponIndexForName(v6);
+    *(int *)((char *)pSelf + pField->ofs) = G_GetWeaponIndexForName(Scr_GetString(0));
 }
 
 void __cdecl ActorScr_GetWeapon(actor_s *pSelf, const actor_fields_s *pField)
@@ -676,9 +659,8 @@ void __cdecl Cmd_AI_DisplayValue(actor_s *pSelf, unsigned __int8 *pBase, const a
     double v9; // r7
     int ofs; // r11
     const char *v11; // r7
-    int v12; // r10
+    gentity_s *v12;
     gentity_s *gentities; // r11
-    unsigned int v14; // r10
     unsigned int v15; // r29
     gentity_s *v16; // r11
     const char *v17; // r8
@@ -760,12 +742,12 @@ void __cdecl Cmd_AI_DisplayValue(actor_s *pSelf, unsigned __int8 *pBase, const a
                 *(float *)&pBase[pField->ofs + 8]);
             return;
         case F_ENTITY:
-            v12 = *(unsigned int *)&pBase[pField->ofs];
+            v12 = *(gentity_s **)&pBase[pField->ofs];
             if (!v12)
                 goto LABEL_18;
             gentities = level.gentities;
-            v14 = (int)((unsigned __int64)(875407347LL * (v12 - (unsigned int)level.gentities)) >> 32) >> 7;
-            v15 = v14 + (v14 >> 31);
+            v15 = (unsigned int)(v12 - level.gentities);
+
             if (v15 >= 0x880)
             {
                 MyAssertHandler(
@@ -804,19 +786,19 @@ void __cdecl Cmd_AI_DisplayValue(actor_s *pSelf, unsigned __int8 *pBase, const a
                 goto LABEL_38;
             goto LABEL_29;
         case F_ACTOR:
-            v22 = pField->ofs;
-            if (*(unsigned int *)&pBase[v22])
-                goto LABEL_32;
-            goto LABEL_18;
-        case F_SENTIENT:
-            v22 = pField->ofs;
-            if (!*(unsigned int *)&pBase[v22])
+            if (!*(actor_s **)&pBase[pField->ofs])
                 goto LABEL_18;
-        LABEL_32:
-            v18 = *(unsigned __int16 *)(**(unsigned int **)&pBase[v22] + 118);
-            v23 = &level.gentities[v18];
-            targetname = v23->targetname;
-            if (v23->targetname)
+            v18 = (*(actor_s **)&pBase[pField->ofs])->ent->s.number;
+            targetname = level.gentities[v18].targetname;
+            if (targetname)
+                goto LABEL_38;
+            goto LABEL_29;
+        case F_SENTIENT:
+            if (!*(sentient_s **)&pBase[pField->ofs])
+                goto LABEL_18;
+            v18 = (*(sentient_s **)&pBase[pField->ofs])->ent->s.number;
+            targetname = level.gentities[v18].targetname;
+            if (targetname)
                 goto LABEL_38;
             goto LABEL_29;
         case F_SENTIENTHANDLE:
@@ -848,7 +830,7 @@ void __cdecl Cmd_AI_DisplayValue(actor_s *pSelf, unsigned __int8 *pBase, const a
                 "ent %i: %s = client %i\n",
                 pSelf->ent->s.number,
                 pField->name,
-                (signed int)(*(unsigned int *)&pBase[pField->ofs] - (unsigned int)level.clients) / 46104);
+                (int)(*(gclient_s **)&pBase[pField->ofs] - level.clients));
             return;
         case F_PATHNODE:
             v25 = *(const pathnode_t **)&pBase[pField->ofs];

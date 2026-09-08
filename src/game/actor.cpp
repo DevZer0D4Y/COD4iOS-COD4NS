@@ -328,7 +328,7 @@ void __cdecl Actor_FinishSpawning(actor_s *self)
     if (self->sentient->ent != self->ent)
         MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor.cpp", 751, 0, "%s", "self->sentient->ent == self->ent");
     ent = self->ent;
-    v3 = G_Find(0, 284, scr_const.player);
+    v3 = G_Find(0, offsetof(gentity_s, classname), scr_const.player);
     if (!v3)
         MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor.cpp", 757, 0, "%s", "player");
     if (!v3->sentient)
@@ -2248,19 +2248,19 @@ int __cdecl Actor_IsMoving(actor_s *self)
 
 unsigned int __cdecl G_GetActorFriendlyIndex(int iEntNum)
 {
-    gentity_s *v2; // r10
+    gentity_s *ent; // r10
     actor_s *actor; // r11
-    unsigned int v4; // r11
 
     if (!level.bDrawCompassFriendlies)
         return -1;
+
     iassert(iEntNum < MAX_GENTITIES);
-    v2 = &g_entities[iEntNum];
-    actor = v2->actor;
-    if (!actor || !actor->bDrawOnCompass || v2->sentient->eTeam != TEAM_ALLIES)
+    ent = &g_entities[iEntNum];
+    actor = ent->actor;
+    if (!actor || !actor->bDrawOnCompass || ent->sentient->eTeam != TEAM_ALLIES)
         return -1;
-    v4 = (int)((unsigned __int64)(2248490037LL * ((char *)actor - (char *)level.actors)) >> 32) >> 12;
-    return v4 + (v4 >> 31);
+
+    return (int)(actor - level.actors);
 }
 
 void __cdecl G_BypassForCG_GetClientActorIndexAndTeam(int iEntNum, int *actorIndex, int *team)
@@ -2687,7 +2687,7 @@ void __cdecl Actor_FreeExpendable()
     if (level.loading)
         Com_Error(ERR_DROP, "too many actors in BSP file");
 
-    player = G_Find(0, 284, scr_const.player);
+    player = G_Find(0, offsetof(gentity_s, classname), scr_const.player);
 
     iassert(player);
     iassert(player->client);
@@ -3308,11 +3308,11 @@ void __cdecl Actor_EntInfo(gentity_s *self, float *source)
     {
         if (enemy)
         {
-            v11 = (char *)actor + 40 * (enemy - level.sentients);
-            if (v11[2100])
+            const sentient_info_t *info = &actor->sentientInfo[enemy - level.sentients];
+            if (info->VisCache.bVisible)
             {
                 v12 = colorGreen;
-                if (level.time - *((unsigned int *)v11 + 526) > 250)
+                if (level.time - info->VisCache.iLastUpdateTime > 250)
                     v12 = colorYellow;
             }
             else

@@ -1072,7 +1072,7 @@ void __cdecl ActorCmd_Teleport(scr_entref_t entref)
     }
     else if (distSquared > 100.0)
     {
-        player = G_Find(0, 284, scr_const.player);
+        player = G_Find(0, offsetof(gentity_s, classname), scr_const.player);
         iassert(player);
         iassert(player->sentient);
         Sentient_GetEyePosition(player->sentient, vEyePos);

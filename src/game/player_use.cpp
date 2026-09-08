@@ -427,11 +427,12 @@ int __cdecl Player_GetUseList(gentity_s *ent, useList_t *useList, int prevHintEn
     v32 = 0;
     if (!v33)
     {
-        p_score = &useList->score;
+        useList_t *use = useList;
+        p_score = &use->score;
         v35 = v31;
         do
         {
-            v36 = (const gentity_s *)*((unsigned int *)p_score - 1);
+            v36 = use->ent;
             if (v36->classname != scr_const.trigger_use_touch)
             {
                 traceEnd[0] = v36->r.absmin[0] + v36->r.absmax[0];
@@ -450,7 +451,9 @@ int __cdecl Player_GetUseList(gentity_s *ent, useList_t *useList, int prevHintEn
                 }
             }
             --v35;
-            p_score += 2;
+            ++use;
+            if (v35)
+                p_score = &use->score;
         } while (v35);
     }
     qsort(useList, v31, 8u, (int(__cdecl *)(const void *, const void *))compare_use);

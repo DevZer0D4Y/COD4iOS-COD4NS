@@ -439,7 +439,7 @@ sentient_s *__cdecl Sentient_NextSentient(sentient_s *pPrevSentient, int iTeamFl
     v5 = pPrevSentient - sentients + 1;
     if (v5 >= 33)
         return 0;
-    for (i = (int)&sentients[v5].eTeam; !*(_BYTE *)(i + 106) || ((1 << *(unsigned int *)i) & iTeamFlags) == 0; i += 116)
+    while (!sentients[v5].inuse || ((1 << sentients[v5].eTeam) & iTeamFlags) == 0)
     {
         if (++v5 >= 33)
             return 0;

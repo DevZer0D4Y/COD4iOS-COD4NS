@@ -190,7 +190,7 @@ void __cdecl Scr_SetGenericField(uint8_t *b, fieldtype_t type, int32_t ofs)
     switch (type)
     {
     case F_INT:
-        *(VariableUnion *)&b[ofs] = Scr_GetInt(0);
+        *(int *)&b[ofs] = Scr_GetInt(0);
         break;
     case F_FLOAT:
         *(float *)&b[ofs] = Scr_GetFloat(0);
@@ -206,7 +206,7 @@ void __cdecl Scr_SetGenericField(uint8_t *b, fieldtype_t type, int32_t ofs)
         *(float *)&b[ofs + 8] = vec[2];
         break;
     case F_ENTITY:
-        *(uint32_t *)&b[ofs] = (uint32_t)Scr_GetEntityAllowNull(0);
+        *(gentity_s **)&b[ofs] = Scr_GetEntityAllowNull(0);
         break;
     case F_ENTHANDLE:
         pEnt = (EntHandle *)&b[ofs];
@@ -643,7 +643,7 @@ void __cdecl SP_worldspawn()
 
     G_LevelSpawnString("message", "", &s);
     SV_SetConfigstring(3, (char *)s);
-    SV_SetConfigstring(10, (char *)g_motd->current.integer);
+    SV_SetConfigstring(10, (char *)g_motd->current.string);
     G_LevelSpawnString("gravity", "800", &s);
 
     iassert(g_gravity);

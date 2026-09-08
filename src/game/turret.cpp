@@ -1581,16 +1581,15 @@ LABEL_53:
     if (pTurretInfo->target.isDefined() && pTurretInfo->target.ent()->sentient)
     {
         sentient = pTurretInfo->target.ent()->sentient;
-        v28 = (char *)actor + 40 * (sentient - level.sentients);
-        v7 = (sentient_info_t *)(v28 + 2100);
-        if (!sentient->bIgnoreMe && level.time - *((unsigned int *)v28 + 529) < pTurretInfo->suppressTime)
+        v7 = &actor->sentientInfo[sentient - level.sentients];
+        if (!sentient->bIgnoreMe && level.time - v7->lastKnownPosTime < pTurretInfo->suppressTime)
         {
-            v38[0] = *((float *)v28 + 531);
-            v38[1] = *((float *)v28 + 532);
+            v38[0] = v7->vLastKnownPos[0];
+            v38[1] = v7->vLastKnownPos[1];
             if ((pTurretInfo->flags & TURRET_HAS_TARGET) != 0)
                 v29 = pTurretInfo->targetPos[2];
             else
-                v29 = (float)(*((float *)v28 + 533) + (float)32.0);
+                v29 = (float)(v7->vLastKnownPos[2] + (float)32.0);
             v38[2] = v29;
             if (turret_aimat_vector(self, v38, 1, v37))
             {

@@ -58,30 +58,15 @@ void __cdecl DebugDrawSuppression(actor_s *self)
 
 int __cdecl Actor_PickNewSuppressantEntry(actor_s *self, sentient_s *pSuppressor)
 {
-    int result; // r3
-    int v4; // r10
-    char *v5; // r9
-    ai_suppression_t *Suppressant; // r11
-    int v7; // r7
-
-    v4 = 0;
-    v5 = 0;
-    Suppressant = self->Suppressant;
-    v7 = -3468 - (unsigned int)self;
-    result = 0;
-    while (Suppressant->pSuppressor != pSuppressor)
+    int oldest = 0;
+    for (int i = 0; i < ARRAY_COUNT(self->Suppressant); ++i)
     {
-        if (Suppressant->iTime < *(int *)((char *)&self->Suppressant[0].iTime + (unsigned int)v5))
-        {
-            result = v4;
-            v5 = (char *)Suppressant + v7;
-        }
-        ++v4;
-        ++Suppressant;
-        if (v4 >= 4)
-            return result;
+        if (self->Suppressant[i].pSuppressor == pSuppressor)
+            return i;
+        if (self->Suppressant[i].iTime < self->Suppressant[oldest].iTime)
+            oldest = i;
     }
-    return v4;
+    return oldest;
 }
 
 int __cdecl Actor_NearCoverNode(actor_s *self)
@@ -129,7 +114,7 @@ void __cdecl Actor_AddSuppressionLine(
     double v8; // fp13
     double v9; // fp12
     double v10; // fp11
-    char *v13; // r11
+    ai_suppression_t *v13; // r11
     double v14; // fp0
     double v15; // fp13
     double v16; // fp12
@@ -172,9 +157,9 @@ void __cdecl Actor_AddSuppressionLine(
                 + (float)((float)((float)v9 * (float)v9) + (float)((float)v8 * (float)v8))) <= (double)(float)(ai_friendlySuppressionDist->current.value * ai_friendlySuppressionDist->current.value))
             {
             LABEL_18:
-                v13 = (char *)self + 24 * Actor_PickNewSuppressantEntry(self, pSuppressor);
-                *((unsigned int *)v13 + 867) = level.time;
-                *((unsigned int *)v13 + 868) = (unsigned int)pSuppressor;
+                v13 = &self->Suppressant[Actor_PickNewSuppressantEntry(self, pSuppressor)];
+                v13->iTime = level.time;
+                v13->pSuppressor = pSuppressor;
                 v14 = (float)(vStart[1] - vEnd[1]);
                 v15 = (float)(*vEnd - *vStart);
                 v16 = (float)((float)(vStart[1] * (float)(*vEnd - *vStart)) + (float)(*vStart * (float)(vStart[1] - vEnd[1])));
@@ -185,12 +170,12 @@ void __cdecl Actor_AddSuppressionLine(
                     v15 = -v15;
                     v16 = -v16;
                 }
-                *((float *)v13 + 869) = v14;
-                *((float *)v13 + 870) = v15;
-                *((float *)v13 + 871) = v16;
+                v13->clipPlane[0] = v14;
+                v13->clipPlane[1] = v15;
+                v13->clipPlane[2] = v16;
                 if (self->sentient->eTeam == pSuppressor->eTeam)
                 {
-                    *((unsigned int *)v13 + 872) = 1;
+                    v13->movementOnly = 1;
                     if (self->eState[self->stateLevel] == AIS_EXPOSED && Actor_HasPath(self))
                     {
                         ProjectPointOntoVector(self->ent->r.currentOrigin, vStart, vEnd, v17);
@@ -202,7 +187,7 @@ void __cdecl Actor_AddSuppressionLine(
                 }
                 if (!self->ignoreSuppression)
                 {
-                    *((unsigned int *)v13 + 872) = 0;
+                    v13->movementOnly = 0;
                     if (!self->suppressionStartTime)
                         self->suppressionStartTime = level.time;
                     Scr_AddEntity(pSuppressor->ent);

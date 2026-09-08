@@ -897,15 +897,11 @@ int __cdecl Actor_Cover_FindBestCoverListInList(actor_s *self, pathsort_t *nodes
     return count;
 }
 
-int __cdecl compare_node_sort(float *pe1, float *pe2)
+int __cdecl compare_node_sort(const void *a, const void *b)
 {
-    double v2; // fp0
-
-    v2 = (float)(pe1[1] - pe2[1]);
-    if (v2 >= 0.0)
-        return v2 > 0.0;
-    else
-        return -1;
+    const pathsort_t *left = (const pathsort_t *)a;
+    const pathsort_t *right = (const pathsort_t *)b;
+    return (left->metric > right->metric) - (left->metric < right->metric);
 }
 
 int __cdecl Actor_Cover_FindBestCoverList(actor_s *self, pathnode_t **bestNodes, int bestNodesInList)
@@ -944,36 +940,11 @@ int __cdecl Actor_Cover_FindBestCoverList(actor_s *self, pathnode_t **bestNodes,
     v10 = BestCoverListInList;
     v11 = 0;
     self->numCoverNodesInGoal = BestCoverListInList;
-    if (BestCoverListInList >= 4)
-    {
-        p_metric = &v29[0].metric;
-        v13 = ((unsigned int)(BestCoverListInList - 4) >> 2) + 1;
-        v11 = 4 * v13;
-        do
-        {
-            --v13;
-            v14 = (float)(p_metric[3] - p_metric[4]);
-            v15 = (float)(p_metric[6] - p_metric[7]);
-            v16 = (float)(p_metric[9] - p_metric[10]);
-            *p_metric = *p_metric - p_metric[1];
-            p_metric[3] = v14;
-            p_metric[6] = v15;
-            p_metric[9] = v16;
-            p_metric += 12;
-        } while (v13);
-    }
-    if (v11 < BestCoverListInList)
-    {
-        v17 = BestCoverListInList - v11;
-        v18 = &v29[v11].metric;
-        do
-        {
-            --v17;
-            *v18 = *v18 - v18[1];
-            v18 += 3;
-        } while (v17);
-    }
-    qsort(v29, BestCoverListInList, 0xCu, (int(__cdecl *)(const void *, const void *))compare_node_sort);
+
+    for (int i = 0; i < BestCoverListInList; ++i)
+        v29[i].metric -= v29[i].distMetric;
+    qsort(v29, BestCoverListInList, sizeof(pathsort_t), compare_node_sort);
+
     v19 = 0;
     if (v10 > 0)
     {
@@ -988,7 +959,7 @@ int __cdecl Actor_Cover_FindBestCoverList(actor_s *self, pathnode_t **bestNodes,
             ++v20;
         } while (v19 < v10);
     }
-    qsort(v29, v10, 0xCu, (int(__cdecl *)(const void *, const void *))compare_node_sort);
+    qsort(v29, v10, sizeof(pathsort_t), compare_node_sort);
     v21 = 0;
     if (v10 > bestNodesInList)
         v21 = v10 - bestNodesInList;
@@ -1076,7 +1047,7 @@ int __cdecl Actor_Cover_UseCoverNode(actor_s *self, pathnode_t *node)
     Sentient_ClaimNode(self->sentient, node);
     v6 = 4 * (self->stateLevel + 3);
     self->iPotentialCoverNodeCount = 0;
-    if (*(gentity_s **)((char *)&self->ent + v6) != (gentity_s *)1)
+    if (self->eState[self->stateLevel] != AIS_EXPOSED)
         Actor_SetState(self, AIS_EXPOSED);
     Actor_SetSubState(self, STATE_EXPOSED_COMBAT);
     return 1;

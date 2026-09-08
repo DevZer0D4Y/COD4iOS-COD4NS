@@ -2950,7 +2950,7 @@ int32_t __cdecl G_LoadVehicle(const char *name)
     int32_t infoIndex = s_numVehicleInfos;
     vehicle_info_t *info = &s_vehicleInfos[infoIndex];
 
-    memset(info, 0, sizeof(*info));
+    memset(info, 0, sizeof(vehicle_info_t));
     BG_StringCopy((uint8_t *)info, name);
 
     if (!ParseConfigStringToStruct(
@@ -3672,8 +3672,8 @@ void __cdecl VEH_VerifyPosition(gentity_s *ent)
         if (SV_EntityContact(mins, maxs, ent))
         {
             // Restore from s_backup (set at frame start by VEH_BackupPosition).
-            memcpy(scr_vehicle,         &s_backup,      0xC0u);
-            memcpy(&scr_vehicle->phys,  &s_backup.phys, sizeof(scr_vehicle->phys));
+            memcpy(&scr_vehicle->pathPos, &s_backup.pathPos, sizeof(vehicle_pathpos_t));
+            memcpy(&scr_vehicle->phys,  &s_backup.phys, sizeof(vehicle_physic_t));
             VEH_SetPosition(ent, scr_vehicle->phys.origin, scr_vehicle->phys.vel, scr_vehicle->phys.angles);
             scr_vehicle->speed = 0.0f;
             return;

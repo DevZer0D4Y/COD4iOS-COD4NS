@@ -67,7 +67,7 @@ int G_GetFreeActorCorpseIndex(int reuse)
     double maxDistSide = -1.0;
     double maxDist = -1.0;
 
-    gentity_s *playerEnt = G_Find(0, 284, scr_const.player);
+    gentity_s *playerEnt = G_Find(0, offsetof(gentity_s, classname), scr_const.player);
     iassert(playerEnt);
     iassert(playerEnt->sentient);
 
@@ -339,7 +339,7 @@ void __cdecl G_PruneLoadedCorpses()
     } while ((int)p_entnum < (int)&g_scr_data.actorBackup);
     if (v2 > 6)
     {
-        ent = G_Find(0, 284, scr_const.player);
+        ent = G_Find(0, offsetof(gentity_s, classname), scr_const.player);
         iassert(ent);
         iassert(ent->sentient);
         Sentient_GetEyePosition(ent->sentient, playerEyePos);

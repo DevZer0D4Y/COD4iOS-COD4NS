@@ -42,33 +42,15 @@ void __cdecl TRACK_actor_threat()
 
 void __cdecl Actor_InitThreatBiasGroups()
 {
-    threat_bias_t *v0; // r11
-    int v1; // ctr
-
-    v0 = &g_threatBias;
-    v1 = 8;
-    do
-    {
-        *(unsigned int *)v0->groupName = 0;
-        v0 = (threat_bias_t *)((char *)v0 + 4);
-        --v1;
-    } while (v1);
-    memset(g_threatBias.threatTable, 0, sizeof(g_threatBias.threatTable));
+    memset(&g_threatBias, 0, sizeof(threat_bias_t));
     g_threatBias.threatGroupCount = 1;
 }
 
 void __cdecl Actor_ClearThreatBiasGroups()
 {
-    threat_bias_t *v0; // r31
-
-    v0 = &g_threatBias;
-    do
-    {
-        if (v0->groupName[0])
-            Scr_SetString(v0->groupName, 0);
-        v0 = (threat_bias_t *)((char *)v0 + 2);
-    } while ((int)v0 < (int)g_threatBias.threatTable);
-    memset(&g_threatBias, 0, sizeof(g_threatBias));
+    for (int i = 0; i < ARRAY_COUNT(g_threatBias.groupName); ++i)
+        Scr_SetString(&g_threatBias.groupName[i], 0);
+    memset(&g_threatBias, 0, sizeof(threat_bias_t));
 }
 
 int __cdecl Actor_FindThreatBiasGroupIndex(unsigned int name)

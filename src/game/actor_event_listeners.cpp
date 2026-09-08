@@ -52,16 +52,13 @@ void __cdecl TRACK_actor_event_listener()
 
 void __cdecl Actor_EventListener_Init()
 {
-    unsigned int *p_events; // r11
-
     g_listenerCount = 0;
-    p_events = &g_AIEVlisteners[0].events;
-    do
+
+    for (int i = 0; i < ARRAY_COUNT(g_AIEVlisteners); ++i)
     {
-        *(p_events - 1) = ENTITYNUM_NONE;
-        *p_events = 0;
-        p_events += 2;
-    } while ((int)p_events < (int)&g_AIEVlisteners[32]);
+        g_AIEVlisteners[i].entIndex = ENTITYNUM_NONE;
+        g_AIEVlisteners[i].events = 0;
+    }
 }
 
 void __cdecl Actor_EventListener_SetCount(int listenerCount)
@@ -76,26 +73,14 @@ int __cdecl Actor_EventListener_GetCount()
 
 int __cdecl Actor_FindEventFromString(unsigned __int16 eventString)
 {
-    int v1; // r9
-    unsigned __int16 **v2; // r11
-    const char *v3; // r3
-    const char *v4; // r3
-
-    v1 = 0;
-    v2 = g_AIEV_scrConst_table;
-    while (!*v2 || **v2 != eventString)
+    for (int i = 0; i < ARRAY_COUNT(g_AIEV_scrConst_table); ++i)
     {
-        ++v2;
-        ++v1;
-        if ((int)v2 >= (int)&g_AIEV_scrConst_table[23])
-        {
-            v3 = SL_ConvertToString(eventString);
-            v4 = va("Unable to find AI event for [%s]", v3);
-            Scr_Error(v4);
-            return 0;
-        }
+        if (g_AIEV_scrConst_table[i] && *g_AIEV_scrConst_table[i] == eventString)
+            return i;
     }
-    return v1;
+
+    Scr_Error(va("Unable to find AI event for [%s]", SL_ConvertToString(eventString)));
+    return 0;
 }
 
 void __cdecl Actor_EventListener_Add(int entIndex, unsigned __int16 eventString)

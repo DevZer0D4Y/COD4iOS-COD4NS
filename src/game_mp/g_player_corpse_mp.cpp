@@ -34,7 +34,7 @@ int __cdecl G_GetFreePlayerCorpseIndex()
 
     bestDistSq = -1.0;
     bestIndex = 0;
-    ent = G_Find(0, 368, scr_const.player);
+    ent = G_Find(0, offsetof(gentity_s, classname), scr_const.player);
     if (!ent)
         MyAssertHandler(".\\game_mp\\g_player_corpse_mp.cpp", 122, 0, "%s", "ent");
     //LODWORD(diff[3]) = ent->s.lerp.pos.trBase; // KISAKTODO??

@@ -3800,7 +3800,7 @@ int32_t Scr_PrecacheShader()
     return G_MaterialIndex(shaderName);
 }
 
-char *Scr_PrecacheString()
+void Scr_PrecacheString()
 {
     const char *result; // eax
 
@@ -3808,8 +3808,9 @@ char *Scr_PrecacheString()
         Scr_Error("precacheString must be called before any wait statements in the gametype or level script\n");
     result = Scr_GetIString(0);
     if (*result)
-        return (char *)G_LocalizedStringIndex((char*)result);
-    return (char*)result;
+    {
+        G_LocalizedStringIndex((char *)result);
+    }
 }
 
 void Scr_AmbientPlay()

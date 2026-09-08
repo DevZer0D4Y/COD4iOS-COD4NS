@@ -43,7 +43,6 @@ float __cdecl Actor_Cover_MinHeightAtCover(pathnode_t *node);
 pathnode_t *__cdecl Actor_Cover_FindCoverFromPoint(actor_s *self, const float *vPoint, double fMinSafeDist);
 int __cdecl isNodeInRegion(pathnode_t *node, gentity_s *volume);
 int __cdecl Actor_Cover_FindBestCoverListInList(actor_s *self, pathsort_t *nodes, int iNodeCount, gentity_s *volume);
-int __cdecl compare_node_sort(float *pe1, float *pe2);
 int __cdecl Actor_Cover_FindBestCoverList(actor_s *self, pathnode_t **bestNodes, int bestNodesInList);
 void __cdecl Actor_Cover_FindCoverNode(actor_s *self);
 pathnode_t *__cdecl Actor_Cover_GetCoverNode(actor_s *self);

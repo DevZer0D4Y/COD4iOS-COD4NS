@@ -527,7 +527,7 @@ int __cdecl G_EntLinkTo(gentity_s *ent, gentity_s *parent, uint32_t tagName)
 int __cdecl G_EntLinkToInternal(gentity_s *ent, gentity_s *parent, uint32_t tagName)
 {
     int pm_type; // [esp+0h] [ebp-10h]
-    char *tagInfo; // [esp+4h] [ebp-Ch]
+    tagInfo_s *tagInfo; // [esp+4h] [ebp-Ch]
     gentity_s *checkEnt; // [esp+8h] [ebp-8h]
     int index; // [esp+Ch] [ebp-4h]
 
@@ -559,19 +559,17 @@ int __cdecl G_EntLinkToInternal(gentity_s *ent, gentity_s *parent, uint32_t tagN
         if (!checkEnt->tagInfo)
             break;
     }
-    tagInfo = (char*)MT_Alloc(112, MT_TYPE_TAG_INFO);
-    *(uint32_t *)tagInfo = (uint32_t)parent;
-    *((_WORD *)tagInfo + 4) = 0;
 
+    tagInfo = (tagInfo_s *)MT_Alloc(sizeof(tagInfo_s), MT_TYPE_TAG_INFO);
+    memset(tagInfo, 0, sizeof(tagInfo_s));
+    tagInfo->parent = parent;
     iassert(!tagName || SL_IsLowercaseString(tagName));
-    
-    Scr_SetString((uint16_t *)tagInfo + 4, tagName);
-    *((uint32_t *)tagInfo + 1) = (uint32_t)parent->tagChildren;
-    *((uint32_t *)tagInfo + 3) = index;
-    memset((uint8_t *)tagInfo + 16, 0, 0x30u);
+    Scr_SetString(&tagInfo->name, tagName);
+    tagInfo->next = parent->tagChildren;
+    tagInfo->index = index;
     parent->tagChildren = ent;
-    ent->tagInfo = (tagInfo_s *)tagInfo;
-    memset((uint8_t *)tagInfo + 64, 0, 0x30u);
+    ent->tagInfo = tagInfo;
+
     if (ent->client)
     {
         pm_type = ent->client->ps.pm_type;
@@ -665,7 +663,7 @@ void __cdecl G_EntUnlink(gentity_s *ent)
             }
         }
         Scr_SetString(&tagInfo->name, 0);
-        MT_Free((byte*)tagInfo, 112);
+        MT_Free((byte *)tagInfo, sizeof(tagInfo_s));
     }
 }
 
@@ -1175,7 +1173,7 @@ gentity_s *__cdecl G_Spawn()
             Com_Error(ERR_DROP, "G_Spawn: no free entities");
         }
         e = &level.gentities[level.num_entities++];
-        SV_LocateGameData(level.gentities, level.num_entities, 628, &level.clients->ps, 12676);
+        SV_LocateGameData(level.gentities, level.num_entities, sizeof(gentity_s), &level.clients->ps, sizeof(gclient_s));
     }
     G_InitGentity(e);
     return e;

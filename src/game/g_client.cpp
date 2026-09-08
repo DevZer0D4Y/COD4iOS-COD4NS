@@ -127,7 +127,7 @@ gentity_s *__cdecl SelectNearestDeathmatchSpawnPoint(const float *from)
 
     v2 = 0;
     v3 = 999999.0;
-    for (i = G_Find(0, 284, scr_const.info_player_deathmatch); i; i = G_Find(i, 284, scr_const.info_player_deathmatch))
+    for (i = G_Find(0, offsetof(gentity_s, classname), scr_const.info_player_deathmatch); i; i = G_Find(i, offsetof(gentity_s, classname), scr_const.info_player_deathmatch))
     {
         v5 = (float)(i->r.currentOrigin[0] - *from);
         v6 = (float)(i->r.currentOrigin[2] - from[2]);
@@ -151,10 +151,10 @@ gentity_s *__cdecl SelectRandomDeathmatchSpawnPoint()
     gentity_s *spotPtrs[140]; // [sp+50h] [-230h] BYREF
 
     numSpots = 0;
-    spot = G_Find(0, 284, scr_const.info_player_deathmatch);
+    spot = G_Find(0, offsetof(gentity_s, classname), scr_const.info_player_deathmatch);
 
     if (!spot)
-        return G_Find(0, 284, scr_const.info_player_deathmatch);
+        return G_Find(0, offsetof(gentity_s, classname), scr_const.info_player_deathmatch);
 
     // Populate List of spots and count them
     ptr = &spotPtrs[0];
@@ -166,11 +166,11 @@ gentity_s *__cdecl SelectRandomDeathmatchSpawnPoint()
             ++numSpots;
             ++ptr;
         }
-        spot = G_Find(spot, 284, scr_const.info_player_deathmatch);
+        spot = G_Find(spot, offsetof(gentity_s, classname), scr_const.info_player_deathmatch);
     } while (spot);
 
     if (!numSpots)
-        return G_Find(0, 284, scr_const.info_player_deathmatch);
+        return G_Find(0, offsetof(gentity_s, classname), scr_const.info_player_deathmatch);
 
     randnum = G_rand();
     //__twllei(v0, 0);
@@ -214,12 +214,12 @@ gentity_s *__cdecl SelectInitialSpawnPoint(float *origin, float *angles)
     gentity_s *v4; // r31
     gentity_s *result; // r3
 
-    v4 = G_Find(0, 284, scr_const.info_player_deathmatch);
+    v4 = G_Find(0, offsetof(gentity_s, classname), scr_const.info_player_deathmatch);
     if (!v4)
         return SelectSpawnPoint(vec3_origin, origin, angles);
     while ((v4->spawnflags & 1) == 0)
     {
-        v4 = G_Find(v4, 284, scr_const.info_player_deathmatch);
+        v4 = G_Find(v4, offsetof(gentity_s, classname), scr_const.info_player_deathmatch);
         if (!v4)
             return SelectSpawnPoint(vec3_origin, origin, angles);
         }

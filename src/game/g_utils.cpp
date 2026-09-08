@@ -643,7 +643,7 @@ void __cdecl G_ClearDemoEntities()
     if (g_entities[0].r.inuse)
     {
         G_FreeEntities();
-        memset(g_entities, 0, 628 * level.num_entities);
+        memset(g_entities, 0, sizeof(gentity_s) * level.num_entities);
     }
     else
     {
@@ -2714,7 +2714,7 @@ void __cdecl G_EntUnlink(gentity_s *ent)
             }
         }
         Scr_SetString(&tagInfo->name, 0);
-        MT_Free((unsigned char *)tagInfo, 112);
+        MT_Free((unsigned char *)tagInfo, sizeof(tagInfo_s));
     }
     //Profile_EndInternal(0);
 }
@@ -3147,7 +3147,7 @@ int __cdecl G_EntLinkToInternal(gentity_s *ent, gentity_s *parent, unsigned int 
         p_parent = &i->tagInfo->parent;
         if (!p_parent)
         {
-            v10 = (tagInfo_s *)MT_Alloc(112, MT_TYPE_TAG_INFO);
+            v10 = (tagInfo_s *)MT_Alloc(sizeof(tagInfo_s), MT_TYPE_TAG_INFO);
             v10->parent = parent;
             v10->name = 0;
             if (tagName && !SL_IsLowercaseString(tagName))

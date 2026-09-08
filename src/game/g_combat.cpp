@@ -82,33 +82,26 @@ void __cdecl G_HitLocStrcpy(unsigned __int8 *pMember, const char *pszKeyValue)
 
 void __cdecl G_ParseHitLocDmgTable()
 {
-    int v0; // r30
-    unsigned __int16 *v1; // r29
-    int *p_iOffset; // r31
-    const char *v3; // r3
-    const char *InfoString; // r3
-    cspField_t v5[20]; // [sp+50h] [-2140h] BYREF
-    char v6[0x2000]; // [sp+140h] [-2050h] BYREF
+    static const char *filename = "info/ai_lochit_dmgtable";
+    cspField_t fields[ARRAY_COUNT(g_HitLocNames)];
+    char buffer[8192];
 
-    v0 = 0;
-    v1 = g_HitLocConstNames;
-    p_iOffset = &v5[0].iOffset;
-    do
+    for (int i = 0; i < ARRAY_COUNT(fields); ++i)
     {
-        v3 = g_HitLocNames[v0];
-        g_fHitLocDamageMult[v0] = 1.0;
-        *p_iOffset = v0 * 4;
-        p_iOffset[1] = CSPFT_FLOAT;
-        *(p_iOffset - 1) = (int)v3;
-        *v1++ = Scr_AllocString((char*)v3, 1);
-        p_iOffset += 3;
-        ++v0;
-    } while ((uintptr_t)v1 < (uintptr_t)&g_HitLocConstNames[19]);
+        g_fHitLocDamageMult[i] = 1.0f;
+        fields[i].szName = g_HitLocNames[i];
+        fields[i].iOffset = i * sizeof(float);
+        fields[i].iFieldType = CSPFT_FLOAT;
+        g_HitLocConstNames[i] = Scr_AllocString((char *)g_HitLocNames[i], 1);
+    }
 
-    g_fHitLocDamageMult[18] = 0.0;
-    InfoString = Com_LoadInfoString((char*)"info/ai_lochit_dmgtable", "hitloc damage table", "LOCDMGTABLE", v6);
-    if (!ParseConfigStringToStruct((unsigned __int8 *)g_fHitLocDamageMult, v5, 19, (char*)InfoString, 0, 0, G_HitLocStrcpy))
-        Com_Error(ERR_DROP, "Error parsing hitloc damage table %s", "info/ai_lochit_dmgtable");
+    g_fHitLocDamageMult[HITLOC_GUN] = 0.0f;
+    const char *infoString = Com_LoadInfoString((char *)filename, "hitloc damage table", "LOCDMGTABLE", buffer);
+    if (!ParseConfigStringToStruct((unsigned __int8 *)g_fHitLocDamageMult, fields,
+        ARRAY_COUNT(fields), (char *)infoString, 0, 0, G_HitLocStrcpy))
+    {
+        Com_Error(ERR_DROP, "Error parsing hitloc damage table %s", filename);
+    }
 }
 
 void __cdecl TossClientItems(gentity_s *self)

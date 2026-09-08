@@ -114,7 +114,7 @@ gentity_s *__cdecl SpawnActor(gentity_s *ent, unsigned int targetname, enumForce
     }
     if (level.loading)
         goto LABEL_24;
-    v11 = G_Find(0, 284, scr_const.player);
+    v11 = G_Find(0, offsetof(gentity_s, classname), scr_const.player);
     if (!v11)
         MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_spawner.cpp", 106, 0, "%s", "player");
     if (!v11->sentient)
