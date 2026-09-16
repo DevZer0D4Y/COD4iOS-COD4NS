@@ -1,4 +1,4 @@
-# COD4iOS
+# COD4iOS/COD4NS
 
 ## About the project
 An open source fully-buildable reimplementation of Call of Duty 4 for iOS and Nintendo Switch.
