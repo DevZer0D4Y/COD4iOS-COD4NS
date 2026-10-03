@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleExecutable</key><string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
+  <key>CFBundleIdentifier</key><string>${MACOSX_BUNDLE_GUI_IDENTIFIER}</string>
+  <key>CFBundleName</key><string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
+  <key>CFBundleDisplayName</key><string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>${MACOSX_BUNDLE_SHORT_VERSION_STRING}</string>
+  <key>CFBundleVersion</key><string>${MACOSX_BUNDLE_BUNDLE_VERSION}</string>
+  <key>LSRequiresIPhoneOS</key><true/>
+  <key>CADisableMinimumFrameDurationOnPhone</key><true/>
+  <!-- Call of Duty 4 servers hand out plain http:// URLs for mod and map downloads, so App
+       Transport Security has to allow them; there is no https equivalent to switch to. -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsArbitraryLoads</key><true/>
+  </dict>
+  <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string><string>metal</string></array>
+  <key>UILaunchScreen</key><dict/>
+  <key>UIUserInterfaceStyle</key><string>Dark</string>
+  <key>UISupportedInterfaceOrientations</key>
+  <array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+  <key>UISupportedInterfaceOrientations~ipad</key>
+  <array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+  <key>GCSupportsControllerUserInteraction</key><true/>
+  <key>GCSupportedGameControllers</key>
+  <array><dict><key>ProfileName</key><string>ExtendedGamepad</string></dict></array>
+  <!-- Required from iOS 26: an app without a scene manifest is trapped at launch. -->
+  <key>UIApplicationSceneManifest</key>
+  <dict>
+    <key>UIApplicationSupportsMultipleScenes</key><false/>
+    <key>UISceneConfigurations</key>
+    <dict>
+      <key>UIWindowSceneSessionRoleApplication</key>
+      <array>
+        <dict>
+          <key>UISceneConfigurationName</key><string>Default</string>
+          <key>UISceneDelegateClassName</key><string>KISEngineSceneDelegate</string>
+        </dict>
+      </array>
+    </dict>
+  </dict>
+  <key>UIFileSharingEnabled</key><true/>
+  <key>LSSupportsOpeningDocumentsInPlace</key><true/>
+</dict></plist>

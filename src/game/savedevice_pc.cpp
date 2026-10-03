@@ -1,0 +1,347 @@
+#ifndef KISAK_SP 
+#error This file is for SinglePlayer only 
+#endif
+
+#include <universal/q_shared.h>
+#include "savedevice.h"
+#include <algorithm>
+#ifdef __APPLE__
+#include "../../ports/ios/save/NativeSaveFile.h"
+#endif
+#include <qcommon/qcommon.h>
+#include <universal/com_files.h>
+#include <client/client.h>      // SaveHeader
+#include "../server/server.h"
+#include <script/scr_readwrite.h>   // Scr_SaveSourceImmediate
+#ifndef KISAK_XBOX
+#include <qcommon/com_playerprofile.h>
+#endif
+
+// void __cdecl SaveDevice_Init(void)    8227fb88 f   savedevice_xenon.obj
+// void __cdecl SV_DisplaySaveErrorUI(void) 8227fba8 f   savedevice_xenon.obj
+// BOOL __cdecl BuildCleanSavePath(char *, unsigned int, char const *, enum SaveType) 8227fbf8 f   savedevice_xenon.obj
+// BOOL __cdecl SaveDevice_IsAccessingDevice(void) 8227fdf0 f   savedevice_xenon.obj
+// void __cdecl WriteSaveToDeviceCleanup(void) 8227fe00 f   savedevice_xenon.obj
+// BOOL __cdecl SaveDevice_IsSaveSuccessful(void) 822800c8 f   savedevice_xenon.obj
+// int __cdecl ReadFromDevice(void *, int, void *) 822800d8 f   savedevice_xenon.obj
+// int __cdecl OpenDevice(char const *, void **) 82280140 f   savedevice_xenon.obj
+// void __cdecl CloseDevice(void *)     822801e0 f   savedevice_xenon.obj
+// BOOL __cdecl SaveExists(char const *)     82280280 f   savedevice_xenon.obj
+// int __cdecl WriteSaveToDevice(unsigned char *, struct SaveHeader const *, BOOL) 82280448 f   savedevice_xenon.obj
+// void __cdecl SV_ForceSelectSaveDevice_f(void) 823cfd38 f   sv_ccmds.obj
+// void __cdecl SV_SelectSaveDevice_f(void) 823cfd90 f   sv_ccmds.obj
+// char const *const CONSOLE_DEFAULT_SAVE_NAME 826969a4     savedevice_xenon.obj
+// int marker_savedevice_pc 82e2081c     savedevice_pc.obj
+// int marker_savedevice_xenon 82e208b4     savedevice_xenon.obj
+// BOOL __cdecl SaveDevice_CheckForError(struct MemcardError const *) 8227fba0 f   savedevice_xenon.obj
+// int __cdecl WriteSaveToDeviceInternal(struct SaveHeader const *) 8227fe48 f   savedevice_xenon.obj
+// void __cdecl BeginScreenUpdateIfSupported(void) 82280218 f   savedevice_xenon.obj
+// void __cdecl EndScreenUpdateIfSupported(void) 82280220 f   savedevice_xenon.obj
+// void *__cdecl SaveExists_OpenContextFile(char const *) 82280228 f   savedevice_xenon.obj
+
+
+static bool g_saveDevice_lastSaveSucceeded = true;
+
+void __cdecl Memcard_InitializeSystem(void)
+{
+}
+
+void __cdecl SaveDevice_Init(void)
+{
+	g_saveDevice_lastSaveSucceeded = true;
+}
+
+void __cdecl SV_DisplaySaveErrorUI(void)
+{
+	Com_PrintError(CON_CHANNEL_FILES, "SV_DisplaySaveErrorUI: a save operation failed\n");
+}
+
+bool __cdecl BuildCleanSavePath(char *cleanSavePath, unsigned int cleanSavePathSize, char const *filename, enum SaveType saveType)
+{
+	if (!filename)
+		MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\savedevice_xenon.cpp", 83, 0, "%s", "filename");
+	if (!cleanSavePath)
+		MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\savedevice_xenon.cpp", 84, 0, "%s", "cleanSavePath");
+
+#ifdef KISAK_XBOX
+	if (saveType == SAVE_TYPE_AUTOSAVE)
+	{
+		char *dst = cleanSavePath;
+		const char *src = CONSOLE_DEFAULT_SAVE_NAME;
+		int c;
+		do
+		{
+			c = (unsigned char)*src++;
+			*dst++ = (char)c;
+		} while (c);
+		return true;
+	}
+#endif
+
+	const char *p = filename;
+	while (*(unsigned char *)p++)
+		;
+	unsigned int len = (unsigned int)(p - filename - 1);
+
+	if (len >= cleanSavePathSize || len >= 0x40u)
+	{
+		Com_Printf(CON_CHANNEL_FILES, "filename '%s' is too long.\n", filename);
+		return false;
+	}
+
+	char buf[144];
+	int i = 0;
+	if (len)
+	{
+		while (1)
+		{
+			char ch = filename[i];
+			if (ch == '/' || ch == '\\')
+			{
+				if (saveType && (i != 8 || I_strnicmp(filename, "autosave", 8)))
+					buf[i] = '-';
+				else
+					buf[i] = '/';
+			}
+			else
+			{
+				if (!I_isforfilename(ch))
+				{
+					Com_Printf(
+						CON_CHANNEL_FILES,
+						"filename '%s' has invalid character (%c) in filename.  Must use alphanumeric characters only.\n",
+						filename,
+						filename[i]);
+					return false;
+				}
+				buf[i] = filename[i];
+			}
+			if (++i >= (int)len)
+				break;
+		}
+	}
+	buf[i] = 0;
+#ifdef KISAK_XBOX
+	Com_sprintf(cleanSavePath, 64, "save/%s.svg", buf);
+	return true;
+#else
+	if (Com_BuildPlayerProfilePath(cleanSavePath, (int)cleanSavePathSize, "save/%s.svg", buf) < 0
+		|| (unsigned int)Com_BuildPlayerProfilePath(cleanSavePath, (int)cleanSavePathSize, "save/%s.svg", buf) >= cleanSavePathSize)
+	{
+		Com_Printf(CON_CHANNEL_FILES, "filename '%s' is too long.\n", filename);
+		return false;
+	}
+	return true;
+#endif
+}
+
+bool __cdecl SaveDevice_IsAccessingDevice(void)
+{
+	return false;
+}
+
+void __cdecl WriteSaveToDeviceCleanup(void)
+{
+}
+
+bool __cdecl SaveDevice_IsSaveSuccessful(void)
+{
+	return g_saveDevice_lastSaveSucceeded;
+}
+
+int __cdecl OpenDevice(char const *name, void **fileHandle)
+{
+	if (!fileHandle)
+		return -1;
+	int handle = 0;
+	unsigned int size = FS_FOpenFileRead(name, &handle);
+	if (!handle)
+	{
+		*fileHandle = 0;
+		return -1;
+	}
+	*fileHandle = (void *)(intptr_t)handle;
+	return (int)size;
+}
+
+void __cdecl CloseDevice(void *fileHandle)
+{
+	int handle = (int)(intptr_t)fileHandle;
+	if (handle)
+		FS_FCloseFile(handle);
+}
+
+int __cdecl ReadFromDevice(void *buffer, int size, void *fileHandle)
+{
+	int handle = (int)(intptr_t)fileHandle;
+	if (!handle || size <= 0)
+        return 0;
+    if (!buffer)
+    {
+        // Scr_SkipSource uses a null destination to consume archived source.
+        // Merely returning zero leaves the following save records misaligned.
+        unsigned char scratch[4096];
+        int consumed = 0;
+        while (consumed < size)
+        {
+            const unsigned int chunk = (unsigned int)std::min(size - consumed, (int)sizeof(scratch));
+            const unsigned int got = FS_Read(scratch, chunk, handle);
+            if (got > chunk) break;
+            consumed += (int)got;
+            if (got != chunk) break;
+        }
+        return consumed;
+    }
+	return (int)FS_Read((unsigned char *)buffer, (unsigned int)size, handle);
+}
+
+static bool SaveExistsValidated(char const *path)
+{
+	int handle = 0;
+	SaveHeader header;
+
+	if (!path || !*path)
+		return false;
+
+	FS_FOpenFileRead(path, &handle);
+	if (!handle)
+		return false;
+
+	const int bytesRead = FS_Read((unsigned char *)&header, (unsigned int)sizeof(SaveHeader), handle);
+	FS_FCloseFile(handle);
+
+	return bytesRead == (int)sizeof(SaveHeader) && header.saveVersion == 287;
+}
+
+bool __cdecl SaveExists(char const *savename)
+{
+	char pathWithExt[256];
+	const char *ext;
+
+	if (!savename || !*savename)
+		return false;
+
+#ifdef KISAK_XBOX
+	return SaveExistsValidated(savename);
+#else
+	if (SaveExistsValidated(savename))
+		return true;
+
+	ext = strrchr(savename, '.');
+	if (!ext || I_stricmp(ext, ".svg") != 0)
+	{
+		Com_sprintf(pathWithExt, sizeof(pathWithExt), "%s.svg", savename);
+		return SaveExistsValidated(pathWithExt);
+	}
+	return false;
+#endif
+}
+
+int __cdecl WriteSaveToDevice(unsigned char *data, struct SaveHeader const *saveHeader, bool /*suppressPlayerNotify*/)
+{
+	if (!data || !saveHeader)
+	{
+		g_saveDevice_lastSaveSucceeded = false;
+		return -1;
+	}
+
+#ifdef KISAK_XBOX
+	int handle = FS_FOpenFileWrite(saveHeader->filename);
+#else
+	int handle = FS_FOpenFileWriteToDir("save/temp.svg", fs_gamedir);
+#endif
+	if (!handle)
+	{
+		Com_PrintError(CON_CHANNEL_FILES, "WriteSaveToDevice: failed to open '%s' for writing\n", saveHeader->filename);
+		g_saveDevice_lastSaveSucceeded = false;
+		return -1;
+	}
+
+	const unsigned int headerSize = (unsigned int)sizeof(SaveHeader);
+	const unsigned int bodySize = (unsigned int)saveHeader->bodySize;
+
+	unsigned int wroteHeader = FS_Write((const char *)saveHeader, headerSize, handle);
+	unsigned int wroteBody = (bodySize > 0)
+		? FS_Write((const char *)data, bodySize, handle)
+		: 0;
+
+
+	SaveImmediate saveImmediate;
+	saveImmediate.f = (void *)(intptr_t)handle;
+	Scr_SaveSourceImmediate(&saveImmediate);
+	if (saveHeader->demoPlayback)
+		SV_SaveDemoImmediate(&saveImmediate);
+
+	const uint32_t expectedSize = FS_FTell(handle);
+	FS_FCloseFile(handle);
+
+	bool ok = (wroteHeader == headerSize) && (wroteBody == bodySize) && saveImmediate.f;
+	g_saveDevice_lastSaveSucceeded = ok;
+	if (!ok)
+	{
+		FS_DeleteInDir((char*)"save/temp.svg", fs_gamedir);
+		g_saveDevice_lastSaveSucceeded = false;
+		Com_PrintError(CON_CHANNEL_FILES,
+			"WriteSaveToDevice: short write to '%s' (header %u/%u, body %u/%u, metadata %s)\n",
+			saveHeader->filename,
+			wroteHeader, headerSize,
+			wroteBody, bodySize, saveImmediate.f ? "complete" : "failed");
+		return -1;
+	}
+
+#ifdef KISAK_XBOX
+	g_saveDevice_lastSaveSucceeded = true;
+#elif defined(__APPLE__)
+    char temporary[260], destination[260];
+    FS_BuildOSPath(fs_homepath->current.string, fs_gamedir, "save/temp.svg", temporary);
+    FS_BuildOSPath(fs_homepath->current.string, "players", saveHeader->filename, destination);
+    if (FS_CreatePath(destination)
+        || !kisak::save::VerifyAndCommit(temporary, destination, saveHeader, headerSize,
+                                         data, bodySize, expectedSize))
+    {
+        g_saveDevice_lastSaveSucceeded = false;
+        Com_PrintError(CON_CHANNEL_FILES, "WriteSaveToDevice: checkpoint '%s' could not be committed (%s). Previous save retained.\n",
+                       saveHeader->filename, strerror(errno));
+        return -1;
+    }
+    g_saveDevice_lastSaveSucceeded = true;
+#else
+	FS_Rename((char*)"save/temp.svg", fs_gamedir,
+		(char*)saveHeader->filename, (char*)"players");
+	g_saveDevice_lastSaveSucceeded = true;
+#endif
+	return 0;
+}
+
+bool __cdecl SaveDevice_CheckForError(struct MemcardError const *)
+{
+	return false;
+}
+
+int __cdecl WriteSaveToDeviceInternal(struct SaveHeader const *saveHeader)
+{
+	if (!saveHeader)
+		return -1;
+
+	Com_PrintError(CON_CHANNEL_FILES, "WriteSaveToDeviceInternal: not used on PC port\n");
+	return -1;
+}
+
+void __cdecl BeginScreenUpdateIfSupported(void)
+{
+}
+
+void __cdecl EndScreenUpdateIfSupported(void)
+{
+}
+
+void *__cdecl SaveExists_OpenContextFile(char const *savename)
+{
+	if (!savename || !*savename)
+		return 0;
+	int handle = 0;
+	FS_FOpenFileRead(savename, &handle);
+	if (!handle)
+		return 0;
+	return (void *)(intptr_t)handle;
+}

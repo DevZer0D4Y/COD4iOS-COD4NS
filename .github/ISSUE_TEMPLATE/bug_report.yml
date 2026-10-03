@@ -1,0 +1,31 @@
+name: Bug report
+description: Report a reproducible COD4iOS problem
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: App version/build
+      placeholder: "1.0.3 (4)"
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device and iOS version
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps and observed behavior
+      description: Include the SP mission or MP server/map, expected result, and exact error message.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log excerpt
+      description: Review player names and personal data before sharing. Do not attach retail game files, saves, certificates or provisioning profiles.
+      render: text

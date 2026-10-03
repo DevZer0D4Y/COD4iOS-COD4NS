@@ -1,0 +1,1253 @@
+#include <cstddef>
+#ifndef KISAK_SP 
+#error This file is for SinglePlayer only 
+#endif
+
+#include <universal/q_shared.h>
+#include "actor_fields.h"
+#include "actor.h"
+#include <script/scr_vm.h>
+#include "g_local.h"
+#include <universal/surfaceflags.h>
+#include <script/scr_const.h>
+#include <qcommon/cmd.h>
+#include "g_main.h"
+
+static_assert(sizeof(void *) != 4 || offsetof(actor_s, ent) == 0, "actor_s::ent must be first (field offsets rebase here)");
+static_assert(sizeof(void *) != 4 || offsetof(actor_s, grenadeAwareness) == 3604, "actor_s script-field offset drift: grenadeawareness");
+static_assert(sizeof(void *) != 4 || offsetof(actor_s, pGrenade) == 3608, "actor_s script-field offset drift: grenade");
+static_assert(sizeof(void *) != 4 || offsetof(actor_s, iGrenadeWeaponIndex) == 3612, "actor_s script-field offset drift: grenadeweapon");
+static_assert(sizeof(void *) != 4 || offsetof(actor_s, iGrenadeAmmo) == 3628, "actor_s script-field offset drift: grenadeammo");
+static_assert(sizeof(void *) != 4 || offsetof(actor_s, suppressionMeter) == 3580, "actor_s script-field offset drift: suppressionmeter");
+
+const actor_fields_s aifields[82] =
+{
+  { "type", offsetof(actor_s, species), F_INT, &ActorScr_SetSpecies, &ActorScr_GetSpecies },
+  { "accuracy", offsetof(actor_s, accuracy), F_FLOAT, &ActorScr_Clamp_0_Positive, NULL },
+  { "lookforward", offsetof(actor_s, vLookForward), F_VECTOR, &ActorScr_ReadOnly, NULL },
+  { "lookright", offsetof(actor_s, vLookRight), F_VECTOR, &ActorScr_ReadOnly, NULL },
+  { "lookup", offsetof(actor_s, vLookUp), F_VECTOR, &ActorScr_ReadOnly, NULL },
+  { "fovcosine", offsetof(actor_s, fovDot), F_FLOAT, &ActorScr_Clamp_0_1, NULL },
+  { "maxsightdistsqrd", offsetof(actor_s, fMaxSightDistSqrd), F_FLOAT, NULL, NULL },
+  { "ignoreclosefoliage", offsetof(actor_s, ignoreCloseFoliage), F_INT, NULL, NULL },
+  { "followmin", offsetof(actor_s, iFollowMin), F_INT, NULL, NULL },
+  { "followmax", offsetof(actor_s, iFollowMax), F_INT, NULL, NULL },
+  { "chainfallback", offsetof(actor_s, chainFallback), F_SHORT, NULL, NULL },
+  { "interval", offsetof(actor_s, fInterval), F_FLOAT, NULL, NULL },
+  { "damagetaken", offsetof(actor_s, iDamageTaken), F_INT, &ActorScr_ReadOnly, NULL },
+  { "damagedir", offsetof(actor_s, damageDir), F_VECTOR, &ActorScr_ReadOnly, NULL },
+  { "damageyaw", offsetof(actor_s, iDamageYaw), F_INT, &ActorScr_ReadOnly, NULL },
+  { "damagelocation", offsetof(actor_s, damageHitLoc), F_STRING, &ActorScr_ReadOnly, NULL },
+  { "damageweapon", offsetof(actor_s, damageWeapon), F_STRING, &ActorScr_ReadOnly, NULL },
+  { "proneok", offsetof(actor_s, bProneOK), F_INT, &ActorScr_ReadOnly, NULL },
+  { "walkdist", offsetof(actor_s, fWalkDist), F_FLOAT, NULL, NULL },
+  { "desiredangle", offsetof(actor_s, fDesiredBodyYaw), F_FLOAT, &ActorScr_ReadOnly, NULL },
+  { "pacifist", offsetof(actor_s, bPacifist), F_INT, NULL, NULL },
+  { "pacifistwait", offsetof(actor_s, iPacifistWait), F_INT, &ActorScr_SetTime, &ActorScr_GetTime },
+  { "ignoresuppression", offsetof(actor_s, ignoreSuppression), F_INT, NULL, NULL },
+  { "suppressionwait", offsetof(actor_s, suppressionWait), F_INT, NULL, NULL },
+  { "suppressionduration", offsetof(actor_s, suppressionDuration), F_INT, NULL, NULL },
+  { "suppressionstarttime", offsetof(actor_s, suppressionStartTime), F_INT, &ActorScr_ReadOnly, NULL },
+  { "suppressionmeter", offsetof(actor_s, suppressionMeter), F_FLOAT, &ActorScr_ReadOnly, NULL },
+  { "name", offsetof(actor_s, properName), F_STRING, NULL, NULL },
+  { "weapon", offsetof(actor_s, weaponName), F_STRING, NULL, NULL },
+  { "dontavoidplayer", offsetof(actor_s, bDontAvoidPlayer), F_INT, NULL, NULL },
+  { "grenadeawareness", offsetof(actor_s, grenadeAwareness), F_FLOAT, &ActorScr_Clamp_0_1, NULL },
+  { "grenade", offsetof(actor_s, pGrenade), F_ENTHANDLE, &ActorScr_ReadOnly, NULL },
+  { "grenadeweapon", offsetof(actor_s, iGrenadeWeaponIndex), F_INT, &ActorScr_SetWeapon, &ActorScr_GetWeapon },
+  { "grenadeammo", offsetof(actor_s, iGrenadeAmmo), F_INT, NULL, NULL },
+  { "favoriteenemy", offsetof(actor_s, pFavoriteEnemy), F_SENTIENTHANDLE, NULL, NULL },
+  { "allowpain", offsetof(actor_s, allowPain), F_BYTE, NULL, NULL },
+  { "allowdeath", offsetof(actor_s, allowDeath), F_BYTE, NULL, NULL },
+  { "delayeddeath", offsetof(actor_s, delayedDeath), F_BYTE, &ActorScr_ReadOnly, NULL },
+  { "providecoveringfire", offsetof(actor_s, provideCoveringFire), F_BYTE, NULL, NULL },
+  { "useable", offsetof(actor_s, useable), F_BYTE, NULL, NULL },
+  { "ignoretriggers", offsetof(actor_s, ignoreTriggers), F_BYTE, NULL, NULL },
+  { "pushable", offsetof(actor_s, pushable), F_BYTE, NULL, NULL },
+  { "dropweapon", offsetof(actor_s, bDropWeapon), F_INT, NULL, NULL },
+  { "drawoncompass", offsetof(actor_s, bDrawOnCompass), F_INT, NULL, NULL },
+  { "scriptstate", offsetof(actor_s, scriptState), F_STRING, &ActorScr_ReadOnly, NULL },
+  { "lastscriptstate", offsetof(actor_s, lastScriptState), F_STRING, &ActorScr_ReadOnly, NULL },
+  { "statechangereason", offsetof(actor_s, stateChangeReason), F_STRING, &ActorScr_ReadOnly, NULL },
+  { "groundtype", offsetof(actor_s, Physics.iSurfaceType), F_STRING, &ActorScr_ReadOnly, &ActorScr_GetGroundType },
+  { "anim_pose", offsetof(actor_s, anim_pose), F_STRING, &ActorScr_SetAnimPos, NULL },
+  { "goalradius", offsetof(actor_s, scriptGoal.radius), F_FLOAT, &ActorScr_SetGoalRadius, NULL },
+  { "goalheight", offsetof(actor_s, scriptGoal.height), F_FLOAT, &ActorScr_SetGoalHeight, NULL },
+  { "goalpos", offsetof(actor_s, codeGoal.pos), F_VECTOR, &ActorScr_ReadOnly, NULL },
+  { "ignoreforfixednodesafecheck", offsetof(actor_s, ignoreForFixedNodeSafeCheck), F_BYTE, NULL, NULL },
+  { "fixednode", offsetof(actor_s, fixedNode), F_BYTE, &ActorScr_SetFixedNode, NULL },
+  { "fixednodesaferadius", offsetof(actor_s, fixedNodeSafeRadius), F_FLOAT, &ActorScr_Clamp_0_Positive, NULL },
+  {
+    "pathgoalpos",
+    offsetof(actor_s, Path.vFinalGoal),
+    F_VECTOR,
+    &ActorScr_ReadOnly,
+    &ActorScr_GetPathGoalPos
+  },
+  { "stopanimdistsq", offsetof(actor_s, Path.pathEndAnimDistSq), F_FLOAT, NULL, NULL },
+  {
+    "lastenemysightpos",
+    offsetof(actor_s, lastEnemySightPos),
+    F_VECTOR,
+    &ActorScr_SetLastEnemySightPos,
+    &ActorScr_GetLastEnemySightPos
+  },
+  { "pathenemylookahead", offsetof(actor_s, pathEnemyLookahead), F_FLOAT, NULL, NULL },
+  { "pathenemyfightdist", offsetof(actor_s, pathEnemyFightDist), F_FLOAT, NULL, NULL },
+  { "meleeattackdist", offsetof(actor_s, meleeAttackDist), F_FLOAT, NULL, NULL },
+  { "chainnode", offsetof(actor_s, pDesiredChainPos), F_PATHNODE, &ActorScr_ReadOnly, NULL },
+  { "movemode", offsetof(actor_s, moveMode), F_STRING, &ActorScr_ReadOnly, &ActorScr_GetMoveMode },
+  { "safetochangescript", offsetof(actor_s, safeToChangeScript), F_BYTE, NULL, NULL },
+  { "keepclaimednode", offsetof(actor_s, keepClaimedNode), F_BYTE, NULL, NULL },
+  { "keepclaimednodeingoal", offsetof(actor_s, keepClaimedNodeInGoal), F_BYTE, NULL, NULL },
+  { "keepnodeduringscriptedanim", offsetof(actor_s, keepNodeDuringScriptedAnim), F_BYTE, NULL, NULL },
+  { "nododgemove", offsetof(actor_s, noDodgeMove), F_BYTE, NULL, NULL },
+  { "leanamount", offsetof(actor_s, leanAmount), F_FLOAT, NULL, NULL },
+  { "badplaceawareness", offsetof(actor_s, badPlaceAwareness), F_FLOAT, &ActorScr_Clamp_0_1, NULL },
+  { "goodshootpos", offsetof(actor_s, goodShootPos), F_VECTOR, NULL, NULL },
+  { "goodshootposvalid", offsetof(actor_s, goodShootPosValid), F_INT, NULL, NULL },
+  { "flashbangimmunity", offsetof(actor_s, flashBangImmunity), F_INT, NULL, NULL },
+  { "lookaheaddir", offsetof(actor_s, Path.lookaheadDir), F_VECTOR, &ActorScr_ReadOnly, NULL },
+  { "exposedduration", offsetof(actor_s, exposedDuration), F_INT, NULL, NULL },
+  { "requestarrivalnotify", offsetof(actor_s, arrivalInfo.arrivalNotifyRequested), F_INT, NULL, NULL },
+  { "engagemindist", offsetof(actor_s, engageMinDist), F_FLOAT, &ActorScr_ReadOnly, NULL },
+  { "engageminfalloffdist", offsetof(actor_s, engageMinFalloffDist), F_FLOAT, &ActorScr_ReadOnly, NULL },
+  { "engagemaxdist", offsetof(actor_s, engageMaxDist), F_FLOAT, &ActorScr_ReadOnly, NULL },
+  { "engagemaxfalloffdist", offsetof(actor_s, engageMaxFalloffDist), F_FLOAT, &ActorScr_ReadOnly, NULL },
+  { "finalaccuracy", offsetof(actor_s, debugLastAccuracy), F_FLOAT, &ActorScr_ReadOnly, NULL },
+  { NULL, 0, F_INT, NULL, NULL }
+};
+
+const actor_fields_s sentientfields[9] =
+{
+  { "threatbias", offsetof(sentient_s, iThreatBias), F_INT, NULL, NULL },
+  { "node", offsetof(sentient_s, pClaimedNode), F_PATHNODE, &ActorScr_ReadOnly, NULL },
+  { "prevnode", offsetof(sentient_s, pPrevClaimedNode), F_PATHNODE, &ActorScr_ReadOnly, NULL },
+  { "enemy", offsetof(sentient_s, targetEnt), F_ENTHANDLE, &ActorScr_ReadOnly, NULL },
+  { "syncedmeleetarget", offsetof(sentient_s, syncedMeleeEnt), F_ENTHANDLE, NULL, NULL },
+  { "ignoreme", offsetof(sentient_s, bIgnoreMe), F_BYTE, NULL, NULL },
+  { "ignoreall", offsetof(sentient_s, bIgnoreAll), F_BYTE, NULL, NULL },
+  { "maxvisibledist", offsetof(sentient_s, maxVisibleDist), F_FLOAT, NULL, NULL },
+  { NULL, 0, F_INT, NULL, NULL }
+};
+
+const actor_fields_s entfields[8] =
+{
+  { "health", offsetof(gentity_s, health), F_INT, NULL, NULL },
+  { "maxhealth", offsetof(gentity_s, maxHealth), F_INT, NULL, NULL },
+  { "targetname", offsetof(gentity_s, targetname), F_STRING, NULL, NULL },
+  { "classname", offsetof(gentity_s, classname), F_STRING, &ActorScr_ReadOnly, NULL },
+  { "spawnflags", offsetof(gentity_s, spawnflags), F_INT, NULL, NULL },
+  { "model", offsetof(gentity_s, model), F_MODEL, &ActorScr_ReadOnly, NULL },
+  { "takedamage", offsetof(gentity_s, takedamage), F_INT, NULL, NULL },
+  { NULL, 0, F_INT, NULL, NULL }
+};
+
+actor_fields_s aifield_list = { 0 };
+actor_fields_s aifield_delete = { 0 };
+
+unsigned __int8 *__cdecl BaseForFields(unsigned __int8 *actor, const actor_fields_s *fields)
+{
+    if (fields != aifields)
+    {
+        if (fields == sentientfields)
+        {
+            return (unsigned __int8 *)((actor_s *)actor)->sentient;
+        }
+        else if (fields == entfields)
+        {
+            return (unsigned __int8 *)((actor_s *)actor)->ent;
+        }
+        else
+        {
+            if (!alwaysfails)
+                MyAssertHandler(
+                    "c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp",
+                    209,
+                    0,
+                    "BaseForFields: invalid fields[]");
+            Com_Error(ERR_DROP, "BaseForFields: invalid fields");
+            return 0;
+        }
+    }
+    return actor;
+}
+
+const actor_fields_s *__cdecl FindFieldForName(const actor_fields_s *fields, const char *pszFieldName)
+{
+    int v4; // r31
+    const actor_fields_s *v5; // r11
+
+    v4 = 0;
+    if (!fields->name)
+        return 0;
+    v5 = fields;
+    while (I_stricmp(pszFieldName, v5->name))
+    {
+        v5 = &fields[++v4];
+        if (!v5->name)
+            return 0;
+    }
+    return &fields[v4];
+}
+
+void __cdecl ActorScr_SetSpecies(actor_s *pSelf, const actor_fields_s *pField)
+{
+    unsigned int type; // [esp+4h] [ebp-4h]
+
+    iassert(pSelf);
+    type = Scr_GetConstString(0);
+    for (int i = 0; i < MAX_AI_SPECIES; ++i)
+    {
+        if (type == *g_AISpeciesNames[i])
+        {
+            pSelf->species = (AISpecies)i;
+            pSelf->ent->s.lerp.u.actor.species = (unsigned __int8)i;
+            G_DObjUpdate(pSelf->ent);
+            return;
+        }
+    }
+    Scr_Error(va("unknown type '%s', should be human, dog, zombie, zombie_dog\n", SL_ConvertToString(type)));
+}
+
+void __cdecl ActorScr_GetSpecies(actor_s *pSelf, const actor_fields_s *pField)
+{
+    AISpecies species; // r7
+
+    if (!pSelf)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 269, 0, "%s", "pSelf");
+    species = pSelf->species;
+    if ((unsigned int)species >= MAX_AI_SPECIES)
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp",
+            270,
+            0,
+            "pSelf->species doesn't index MAX_AI_SPECIES\n\t%i not in [0, %i)",
+            species,
+            2);
+    Scr_AddConstString(*g_AISpeciesNames[pSelf->species]);
+}
+
+void __cdecl ActorScr_Clamp_0_1(actor_s *pSelf, const actor_fields_s *pField)
+{
+    double Float; // fp1
+    double v5; // fp31
+    const char *v6; // r3
+
+    if (!pSelf)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 283, 0, "%s", "pSelf");
+    if (!pField)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 288, 0, "%s", "pField");
+    Float = Scr_GetFloat(0);
+    v5 = 1.0;
+    if (Float > 1.0)
+    {
+        v6 = va("actor field %s clamped from %g to 1\n", pField->name, Float);
+    LABEL_9:
+        Scr_Error(v6);
+        Float = v5;
+        goto LABEL_10;
+    }
+    v5 = 0.0;
+    if (Float < 0.0)
+    {
+        v6 = va("actor field %s clamped from %g to 0\n", pField->name, Float);
+        goto LABEL_9;
+    }
+LABEL_10:
+    *(float *)((char *)&pSelf->ent + pField->ofs) = Float;
+}
+
+void __cdecl ActorScr_Clamp_0_Positive(actor_s *pSelf, const actor_fields_s *pField)
+{
+    double Float; // fp1
+    const char *v5; // r3
+
+    if (!pSelf)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 316, 0, "%s", "pSelf");
+    if (!pField)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 321, 0, "%s", "pField");
+    Float = Scr_GetFloat(0);
+    if (Float < 0.0)
+    {
+        v5 = va("actor field %s clamped from %g to 0\n", pField->name, Float);
+        Scr_Error(v5);
+        Float = 0.0;
+    }
+    *(float *)((char *)pSelf + pField->ofs) = Float;
+}
+
+void __cdecl ActorScr_ReadOnly(actor_s *pSelf, const actor_fields_s *pField)
+{
+    const char *v3; // r3
+
+    if (!pSelf)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 344, 0, "%s", "pSelf");
+    if (!pField)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 347, 0, "%s", "pField");
+    v3 = va("actor field %s is read-only", pField->name);
+    Scr_Error(v3);
+}
+
+void __cdecl ActorScr_SetGoalRadius(actor_s *pSelf, const actor_fields_s *pField)
+{
+    double Float; // fp31
+
+    if (!pSelf)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 364, 0, "%s", "pSelf");
+    Float = Scr_GetFloat(0);
+    if (Float < 0.0)
+        Scr_ParamError(0, "radius must be >= 0");
+    Actor_SetGoalRadius(&pSelf->scriptGoal, Float);
+}
+
+void __cdecl ActorScr_SetGoalHeight(actor_s *pSelf, const actor_fields_s *pField)
+{
+    double Float; // fp1
+
+    if (!pSelf)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 382, 0, "%s", "pSelf");
+    Float = Scr_GetFloat(0);
+    Actor_SetGoalHeight(&pSelf->scriptGoal, Float);
+}
+
+void __cdecl ActorScr_SetTime(actor_s *pSelf, const actor_fields_s *pField)
+{
+    iassert(pSelf);
+    iassert(pField);
+    iassert(pField->type == F_INT);
+
+    float milliseconds = Scr_GetFloat(0) * 1000.0f;
+    *(int *)((char *)pSelf + pField->ofs) = (int)floorf(milliseconds + 0.5f);
+}
+
+void __cdecl ActorScr_GetTime(actor_s *pSelf, const actor_fields_s *pField)
+{
+    iassert(pSelf);
+    iassert(pField);
+    iassert(pField->type == F_INT);
+
+    int milliseconds = *(const int *)((const char *)pSelf + pField->ofs);
+    Scr_AddFloat((float)milliseconds * 0.001);
+}
+
+void __cdecl ActorScr_SetWeapon(actor_s *pSelf, const actor_fields_s *pField)
+{
+    iassert(pSelf);
+    iassert(pField);
+    iassert(pField->type == F_INT);
+
+    const char *String = Scr_GetString(0);
+    if (!G_GetWeaponIndexForName(String))
+    {
+        Scr_ParamError(0, va("Can't find weapon [%s].  It probably needs to be precached.", String));
+    }
+    *(int *)((char *)pSelf + pField->ofs) = G_GetWeaponIndexForName(Scr_GetString(0));
+}
+
+void __cdecl ActorScr_GetWeapon(actor_s *pSelf, const actor_fields_s *pField)
+{
+    WeaponDef *WeaponDef; // r3
+
+    if (!pField)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 454, 0, "%s", "pField");
+    if (pField->type)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 455, 0, "%s", "pField->type == F_INT");
+    WeaponDef = BG_GetWeaponDef(*(unsigned int *)((char *)&pSelf->ent + pField->ofs));
+    if (WeaponDef)
+        Scr_AddString(WeaponDef->szInternalName);
+}
+
+void __cdecl ActorScr_GetGroundType(actor_s *pSelf, const actor_fields_s *pField)
+{
+    int iSurfaceType; // r3
+    const char *v5; // r3
+
+    if (!pSelf)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 472, 0, "%s", "pSelf");
+    if (!pField)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 473, 0, "%s", "pField");
+    if (pField->type != F_STRING)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 474, 0, "%s", "pField->type == F_STRING");
+    if (pField->ofs != offsetof(actor_s, Physics.iSurfaceType))
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp",
+            475,
+            0,
+            "%s",
+            "pField->ofs == AFOFS( Physics.iSurfaceType )");
+    iSurfaceType = pSelf->Physics.iSurfaceType;
+    if (iSurfaceType)
+    {
+        v5 = Com_SurfaceTypeToName(iSurfaceType);
+        Scr_AddString(v5);
+    }
+}
+
+void __cdecl ActorScr_SetAnimPos(actor_s *pSelf, const actor_fields_s *pField)
+{
+    unsigned int ConstString; // r30
+    int IsProne; // r3
+    const char *v6; // r28
+    const char *v7; // r30
+    const char *v8; // r3
+    const char *v9; // r3
+
+    if (!pSelf)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 492, 0, "%s", "pSelf");
+    if (!pField)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 495, 0, "%s", "pField");
+    ConstString = Scr_GetConstString(0);
+    IsProne = BG_ActorGoalIsProne(&pSelf->ProneInfo);
+    if ((scr_const.prone == ConstString) == IsProne)
+    {
+        Scr_SetString(&pSelf->anim_pose, ConstString);
+    }
+    else
+    {
+        if (IsProne)
+            v6 = "ExitProne";
+        else
+            v6 = "EnterProne";
+        v7 = SL_ConvertToString(ConstString);
+        v8 = SL_ConvertToString(pSelf->anim_pose);
+        v9 = va(
+            "entnum %d is attempting to change anim_pose from \"%s\" to \"%s\" but %s was not called",
+            pSelf->ent->s.number,
+            v8,
+            v7,
+            v6);
+        Scr_ErrorWithDialogMessage(v9, "");
+    }
+}
+
+void __cdecl ActorScr_SetLastEnemySightPos(actor_s *pSelf, const actor_fields_s *pField)
+{
+    if (!pSelf)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 523, 0, "%s", "pSelf");
+    if (!pField)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 524, 0, "%s", "pField");
+    if (pField->type != F_VECTOR)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 525, 0, "%s", "pField->type == F_VECTOR");
+    if (pField->ofs != offsetof(actor_s, lastEnemySightPos))
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp",
+            526,
+            0,
+            "%s",
+            "pField->ofs == AFOFS( lastEnemySightPos )");
+    if (Scr_GetType(0))
+    {
+        Scr_GetVector(0, pSelf->lastEnemySightPos);
+        pSelf->lastEnemySightPosValid = 1;
+    }
+    else
+    {
+        pSelf->lastEnemySightPosValid = 0;
+    }
+}
+
+void __cdecl ActorScr_GetLastEnemySightPos(actor_s *pSelf, const actor_fields_s *pField)
+{
+    if (!pSelf)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 546, 0, "%s", "pSelf");
+    if (!pField)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 547, 0, "%s", "pField");
+    if (pField->type != F_VECTOR)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 548, 0, "%s", "pField->type == F_VECTOR");
+    if (pField->ofs != offsetof(actor_s, lastEnemySightPos))
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp",
+            549,
+            0,
+            "%s",
+            "pField->ofs == AFOFS( lastEnemySightPos )");
+    if (pSelf->lastEnemySightPosValid)
+        Scr_AddVector(pSelf->lastEnemySightPos);
+}
+
+void __cdecl ActorScr_GetPathGoalPos(actor_s *self, const actor_fields_s *field)
+{
+    if (!self)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 564, 0, "%s", "self");
+    if (!field)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 565, 0, "%s", "field");
+    if (field->type != F_VECTOR)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 566, 0, "%s", "field->type == F_VECTOR");
+    if (field->ofs != offsetof(actor_s, Path.vFinalGoal))
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp",
+            567,
+            0,
+            "%s",
+            "field->ofs == AFOFS( Path.vFinalGoal )");
+    if (Actor_HasPath(self))
+        Scr_AddVector(self->Path.vFinalGoal);
+}
+
+void __cdecl ActorScr_SetFixedNode(actor_s *self, const actor_fields_s *field)
+{
+    unsigned int Int; // r3
+
+    if (!self)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 582, 0, "%s", "self");
+    if (!field)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 583, 0, "%s", "field");
+    if (field->type != F_BYTE)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 584, 0, "%s", "field->type == F_BYTE");
+    Int = Scr_GetInt(0);
+    self->exposedStartTime = 0x80000000;
+    //self->fixedNode = (_cntlzw(Int) & 0x20) == 0;
+    self->fixedNode = Int != 0;
+}
+
+void __cdecl ActorScr_GetMoveMode(actor_s *pSelf, const actor_fields_s *pField)
+{
+    if (!pSelf)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 598, 0, "%s", "pSelf");
+    if (!pField)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 599, 0, "%s", "pField");
+    if (pField->type != F_STRING)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 600, 0, "%s", "pField->type == F_STRING");
+    if (pField->ofs != offsetof(actor_s, moveMode))
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp",
+            601,
+            0,
+            "%s",
+            "pField->ofs == AFOFS( moveMode )");
+    switch (pSelf->moveMode)
+    {
+    case 0u:
+        Scr_AddConstString(scr_const.stop);
+        break;
+    case 1u:
+        Scr_AddConstString(scr_const.stop_soon);
+        break;
+    case 2u:
+        Scr_AddConstString(scr_const.walk);
+        break;
+    case 3u:
+        Scr_AddConstString(scr_const.run);
+        break;
+    default:
+        if (!alwaysfails)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 622, 0, "unhandled");
+        break;
+    }
+}
+
+void __cdecl PrintFieldUsage(const actor_fields_s *fields)
+{
+    int v2; // r15
+    const actor_fields_s *v3; // r10
+    fieldtype_t type; // r4
+    const char *v5; // r3
+
+    v2 = 0;
+    if (fields->name)
+    {
+        v3 = fields;
+        do
+        {
+            type = v3->type;
+            switch (type)
+            {
+            case F_INT:
+                Com_Printf(CON_CHANNEL_DONT_FILTER, "^5  %-20s: %s\n", v3->name, "int");
+                break;
+            case F_SHORT:
+                Com_Printf(CON_CHANNEL_DONT_FILTER, "^5  %-20s: %s\n", v3->name, "short");
+                break;
+            case F_BYTE:
+                Com_Printf(CON_CHANNEL_DONT_FILTER, "^5  %-20s: %s\n", v3->name, "byte");
+                break;
+            case F_FLOAT:
+                Com_Printf(CON_CHANNEL_DONT_FILTER, "^5  %-20s: %s\n", v3->name, "float");
+                break;
+            case F_STRING:
+            case F_MODEL:
+                Com_Printf(CON_CHANNEL_DONT_FILTER, "^5  %-20s: %s\n", v3->name, "string");
+                break;
+            case F_VECTOR:
+                Com_Printf(CON_CHANNEL_DONT_FILTER, "^5  %-20s: %s\n", v3->name, "vector");
+                break;
+            case F_ENTITY:
+            case F_ENTHANDLE:
+                Com_Printf(CON_CHANNEL_DONT_FILTER, "^5  %-20s: %s\n", v3->name, "entnum");
+                break;
+            case F_ACTOR:
+                Com_Printf(CON_CHANNEL_DONT_FILTER, "^5  %-20s: %s\n", v3->name, "actor");
+                break;
+            case F_SENTIENT:
+            case F_SENTIENTHANDLE:
+                Com_Printf(CON_CHANNEL_DONT_FILTER, "^5  %-20s: %s\n", v3->name, "sentient");
+                break;
+            case F_CLIENT:
+                Com_Printf(CON_CHANNEL_DONT_FILTER, "^5  %-20s: %s\n", v3->name, "clientnum");
+                break;
+            case F_PATHNODE:
+                Com_Printf(CON_CHANNEL_DONT_FILTER, "^5  %-20s: %s\n", v3->name, "pathnode");
+                break;
+            case F_ACTORGROUP:
+                Com_Printf(CON_CHANNEL_DONT_FILTER, "^5  %-20s: %s\n", v3->name, "actorgroup");
+                break;
+            default:
+                if (!alwaysfails)
+                {
+                    v5 = va("Cmd_AI_f: unhandled field type %i\n", type);
+                    MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 685, 0, v5);
+                }
+                break;
+            }
+            v3 = &fields[++v2];
+        } while (v3->name);
+    }
+}
+
+void Cmd_AI_PrintUsage()
+{
+    Com_Printf(CON_CHANNEL_DONT_FILTER, "^5USAGE: ai (!)target field (value), or ai (!) target [list/delete]\n");
+    Com_Printf(
+        CON_CHANNEL_DONT_FILTER,
+        "^5target can be an entity number, a targetname, an entity classname,\n    'all', 'axis', 'allies', or 'neutral'\n");
+    Com_Printf(CON_CHANNEL_DONT_FILTER, "^5if ! immediately precedes target, it uses AI that don't match target\n");
+    Com_Printf(CON_CHANNEL_DONT_FILTER, "^5field can be one of:\n");
+    PrintFieldUsage(aifields);
+    PrintFieldUsage(sentientfields);
+    PrintFieldUsage(entfields);
+}
+
+void __cdecl Cmd_AI_DisplayInfo(actor_s *actor)
+{
+    const char *v2; // r31
+    const char *v3; // r3
+    const char *v4; // r3
+
+    if (!actor)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 720, 0, "%s", "actor");
+    if (!actor->ent)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 721, 0, "%s", "actor->ent");
+    if (!actor->ent->classname)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 722, 0, "%s", "actor->ent->classname");
+    if (!actor->sentient)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 723, 0, "%s", "actor->sentient");
+    v2 = SL_ConvertToString(actor->ent->classname);
+    v3 = Sentient_NameForTeam(actor->sentient->eTeam);
+    Com_Printf(CON_CHANNEL_DONT_FILTER, "ent %i (%-7s) %-24s", actor->ent->s.number, v3, v2);
+    if (actor->ent->targetname)
+    {
+        v4 = SL_ConvertToString(actor->ent->targetname);
+        Com_Printf(CON_CHANNEL_DONT_FILTER, " targetname %s", v4);
+    }
+    Com_Printf(CON_CHANNEL_DONT_FILTER, "\n");
+}
+
+void __cdecl Cmd_AI_Delete(actor_s *actor)
+{
+    if (!actor)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 742, 0, "%s", "actor");
+    if (!actor->ent)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 743, 0, "%s", "actor->ent");
+    G_FreeEntityDelay(actor->ent);
+}
+
+void __cdecl Cmd_AI_DisplayValue(actor_s *pSelf, unsigned __int8 *pBase, const actor_fields_s *pField)
+{
+    int number; // r28
+    __int64 v7; // r11
+    fieldtype_t type; // r4
+    double v9; // r7
+    int ofs; // r11
+    const char *v11; // r7
+    gentity_s *v12;
+    gentity_s *gentities; // r11
+    unsigned int v15; // r29
+    gentity_s *v16; // r11
+    const char *v17; // r8
+    unsigned int v18; // r30
+    gentity_s *v19; // r11
+    unsigned int targetname; // r3
+    const char *v21; // r8
+    int v22; // r11
+    gentity_s *v23; // r11
+    gentity_s *v24; // r11
+    const pathnode_t *v25; // r3
+    int v26; // r3
+    unsigned int v27; // r3
+    const char *v28; // r3
+    const char *v29; // r3
+
+    SentientHandle *senthand;
+    EntHandle *enthand;
+
+    if (!pField)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 763, 0, "%s", "pField");
+    number = pSelf->ent->s.number;
+    if (pField->getter == ActorScr_GetTime)
+    {
+        if (pField->type)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 769, 0, "%s", "pField->type == F_INT");
+        HIDWORD(v7) = pField->ofs;
+        LODWORD(v7) = *(unsigned int *)&pBase[HIDWORD(v7)];
+
+        Com_Printf(
+            CON_CHANNEL_DONT_FILTER,
+            "ent %i: %s = %g\n",
+            number,
+            pField->name,
+            (float)((float)(int)v7 * (float)0.001));
+    }
+    else
+    {
+        type = pField->type;
+        switch (type)
+        {
+        case F_INT:
+            Com_Printf(CON_CHANNEL_DONT_FILTER, "ent %i: %s = %i\n", pSelf->ent->s.number, pField->name, *(unsigned int *)&pBase[pField->ofs]);
+            return;
+        case F_SHORT:
+            Com_Printf(CON_CHANNEL_DONT_FILTER, "ent %i: %s = %i\n", pSelf->ent->s.number, pField->name, *(__int16 *)&pBase[pField->ofs]);
+            return;
+        case F_BYTE:
+            Com_Printf(CON_CHANNEL_DONT_FILTER, "ent %i: %s = %i\n", pSelf->ent->s.number, pField->name, pBase[pField->ofs]);
+            return;
+        case F_FLOAT:
+            // KISAKFIX: IDA hex-rays `(const char*)HIDWORD(v9)` is a PPC double-pass
+            // artifact. Disasm at 0x821f3f90 case 3: r4=fmt, r5=number, r6=pField->name,
+            // double via f1+stack. Literal x86 port treats HIDWORD(v9) as a %s pointer
+            // → garbage deref → crash on every `ai <ent> <floatField>` console command.
+            Com_Printf(CON_CHANNEL_DONT_FILTER, "ent %i: %s = %g\n", pSelf->ent->s.number, pField->name,
+                       *(float *)&pBase[pField->ofs]);
+            return;
+        case F_STRING:
+            ofs = pField->ofs;
+            if (*(_WORD *)&pBase[ofs])
+                v11 = SL_ConvertToString(*(unsigned __int16 *)&pBase[ofs]);
+            else
+                v11 = "<undefined>";
+            Com_Printf(CON_CHANNEL_DONT_FILTER, "ent %i: %s = %s\n", number, pField->name, v11);
+            return;
+        case F_VECTOR:
+            // KISAKFIX: kisak port dropped `pField->name` from the arg list. IDA disasm
+            // at 0x821f4004 case 5 passes 6 args (fmt, num, name, v0, v1, v2). Missing
+            // name argument shifted `*(float*)&pBase[ofs]` into the `%s` slot — crash
+            // on every `ai <ent> <vectorField>` console command.
+            Com_Printf(
+                CON_CHANNEL_DONT_FILTER,
+                "ent %i: %s = %g %g %g\n",
+                pSelf->ent->s.number,
+                pField->name,
+                *(float *)&pBase[pField->ofs],
+                *(float *)&pBase[pField->ofs + 4],
+                *(float *)&pBase[pField->ofs + 8]);
+            return;
+        case F_ENTITY:
+            v12 = *(gentity_s **)&pBase[pField->ofs];
+            if (!v12)
+                goto LABEL_18;
+            gentities = level.gentities;
+            v15 = (unsigned int)(v12 - level.gentities);
+
+            if (v15 >= 0x880)
+            {
+                MyAssertHandler(
+                    "c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp",
+                    809,
+                    0,
+                    "%s",
+                    "i >= 0 && i < MAX_GENTITIES");
+                gentities = level.gentities;
+            }
+            v16 = &gentities[v15];
+            if (v16->targetname)
+                v17 = SL_ConvertToString(v16->targetname);
+            else
+                v17 = "<undefined>";
+            Com_Printf(CON_CHANNEL_DONT_FILTER, "ent %i: %s = %i (targetname %s)\n", number, pField->name, v15, v17);
+            return;
+        case F_ENTHANDLE:
+            enthand = (EntHandle *)&pBase[pField->ofs];
+            
+            //if (!EntHandle::isDefined((EntHandle *)&pBase[pField->ofs]))
+            if (!enthand->isDefined())
+                goto LABEL_18;
+            //v18 = EntHandle::entnum((EntHandle *)&pBase[pField->ofs]);
+            v18 = enthand->entnum();
+            if (v18 >= 0x880)
+                MyAssertHandler(
+                    "c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp",
+                    823,
+                    0,
+                    "%s",
+                    "i >= 0 && i < MAX_GENTITIES");
+            v19 = &level.gentities[v18];
+            targetname = v19->targetname;
+            if (v19->targetname)
+                goto LABEL_38;
+            goto LABEL_29;
+        case F_ACTOR:
+            if (!*(actor_s **)&pBase[pField->ofs])
+                goto LABEL_18;
+            v18 = (*(actor_s **)&pBase[pField->ofs])->ent->s.number;
+            targetname = level.gentities[v18].targetname;
+            if (targetname)
+                goto LABEL_38;
+            goto LABEL_29;
+        case F_SENTIENT:
+            if (!*(sentient_s **)&pBase[pField->ofs])
+                goto LABEL_18;
+            v18 = (*(sentient_s **)&pBase[pField->ofs])->ent->s.number;
+            targetname = level.gentities[v18].targetname;
+            if (targetname)
+                goto LABEL_38;
+            goto LABEL_29;
+        case F_SENTIENTHANDLE:
+            senthand = (SentientHandle *)&pBase[pField->ofs];
+            //if (SentientHandle::isDefined((SentientHandle *)&pBase[pField->ofs]))
+            if (senthand->isDefined())
+            {
+                //v18 = SentientHandle::sentient((SentientHandle *)&pBase[pField->ofs])->ent->s.number;
+                v18 = senthand->sentient()->ent->s.number;
+                v24 = &level.gentities[v18];
+                targetname = v24->targetname;
+                if (v24->targetname)
+                    LABEL_38:
+                v21 = SL_ConvertToString(targetname);
+                else
+                    LABEL_29:
+                v21 = "<undefined>";
+                Com_Printf(CON_CHANNEL_DONT_FILTER, "ent %i: %s = %i (targetname %s)\n", number, pField->name, v18, v21);
+            }
+            else
+            {
+            LABEL_18:
+                Com_Printf(CON_CHANNEL_DONT_FILTER, "ent %i: %s = (null)\n", number, pField->name);
+            }
+            break;
+        case F_CLIENT:
+            Com_Printf(
+                CON_CHANNEL_DONT_FILTER,
+                "ent %i: %s = client %i\n",
+                pSelf->ent->s.number,
+                pField->name,
+                (int)(*(gclient_s **)&pBase[pField->ofs] - level.clients));
+            return;
+        case F_PATHNODE:
+            v25 = *(const pathnode_t **)&pBase[pField->ofs];
+            if (v25)
+            {
+                v26 = Path_ConvertNodeToIndex(v25);
+                Com_Printf(CON_CHANNEL_DONT_FILTER, "ent %i: %s = node %i\n", number, pField->name, v26);
+            }
+            else
+            {
+                Com_Printf(CON_CHANNEL_DONT_FILTER, "ent %i: %s = (null)\n", pSelf->ent->s.number, pField->name);
+            }
+            return;
+        case F_MODEL:
+            v27 = G_ModelName(pBase[pField->ofs]);
+            v28 = SL_ConvertToString(v27);
+            Com_Printf(CON_CHANNEL_DONT_FILTER, "ent %i: %s = %s\n", number, pField->name, v28);
+            return;
+        case F_ACTORGROUP:
+            return;
+        default:
+            if (!alwaysfails)
+            {
+                v29 = va("Cmd_AI_f: unhandled field type %i for %s\n", type, pField->name);
+                MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 888, 0, v29);
+            }
+            return;
+        }
+    }
+}
+
+void __cdecl Cmd_AI_SetValue(actor_s *pSelf, int argc, unsigned __int8 *pBase, const actor_fields_s *pField)
+{
+    void(__cdecl * setter)(actor_s *, const actor_fields_s *); // r11
+    long double v9; // fp2
+    long double v10; // fp2
+    long double v11; // fp2
+    fieldtype_t type; // r4
+    long double v13; // fp2
+    int v14; // r29
+    int i; // r31
+    long double v16; // fp2
+    int ofs; // r10
+    const char *v18; // r3
+    _BYTE v19[24]; // [sp+58h] [-158h] BYREF
+    char v20[320]; // [sp+70h] [-140h] BYREF
+
+    if (!pField)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 908, 0, "%s", "pField");
+    setter = pField->setter;
+    if (setter == ActorScr_ReadOnly)
+    {
+        Com_PrintError(CON_CHANNEL_DONT_FILTER, "%s is read-only\n", pField->name);
+        return;
+    }
+    if (setter == ActorScr_SetTime)
+    {
+        if (pField->type)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 918, 0, "%s", "pField->type == F_INT");
+        if (argc != 4)
+            goto LABEL_9;
+        SV_Cmd_ArgvBuffer(3, v20, 256);
+        v9 = atof(v20);
+        *(double *)&v9 = (float)((float)((float)*(double *)&v9 * (float)1000.0) + (float)0.5);
+        v10 = floor(v9);
+        *(unsigned int *)&pBase[pField->ofs] = (int)(float)*(double *)&v10;
+    }
+    else if (pField->getter == ActorScr_SetGoalRadius)
+    {
+        if (argc != 4)
+        {
+        LABEL_9:
+            Cmd_AI_PrintUsage();
+            return;
+        }
+        SV_Cmd_ArgvBuffer(3, v20, 256);
+        v11 = atof(v20);
+        Actor_SetGoalRadius(&pSelf->scriptGoal, (float)*(double *)&v11);
+    }
+    else
+    {
+        type = pField->type;
+        switch (type)
+        {
+        case F_INT:
+            if (argc != 4)
+                goto LABEL_9;
+            SV_Cmd_ArgvBuffer(3, v20, 256);
+            *(unsigned int *)&pBase[pField->ofs] = atol(v20);
+            break;
+        case F_SHORT:
+            if (argc != 4)
+                goto LABEL_9;
+            SV_Cmd_ArgvBuffer(3, v20, 256);
+            *(_WORD *)&pBase[pField->ofs] = atol(v20);
+            break;
+        case F_BYTE:
+            if (argc != 4)
+                goto LABEL_9;
+            SV_Cmd_ArgvBuffer(3, v20, 256);
+            pBase[pField->ofs] = atol(v20);
+            break;
+        case F_FLOAT:
+            if (argc != 4)
+                goto LABEL_9;
+            SV_Cmd_ArgvBuffer(3, v20, 256);
+            v13 = atof(v20);
+            *(float *)&pBase[pField->ofs] = *(double *)&v13;
+            break;
+        case F_STRING:
+        case F_ENTITY:
+        case F_ENTHANDLE:
+        case F_ACTOR:
+        case F_SENTIENT:
+        case F_SENTIENTHANDLE:
+        case F_CLIENT:
+        case F_PATHNODE:
+        case F_MODEL:
+        case F_ACTORGROUP:
+            Com_Printf(CON_CHANNEL_DONT_FILTER, "cannot set from console\n");
+            break;
+        case F_VECTOR:
+            if (argc != 6)
+                goto LABEL_9;
+            v14 = 0;
+            for (i = 0; i < 12; i += 4)
+            {
+                SV_Cmd_ArgvBuffer(v14 + 3, v20, 256);
+                v16 = atof(v20);
+                ofs = pField->ofs;
+                ++v14;
+                *(float *)&v19[i] = *(double *)&v16;
+                *(float *)&pBase[i + ofs] = *(double *)&v16;
+            }
+            break;
+        default:
+            if (!alwaysfails)
+            {
+                v18 = va("Cmd_AI_f: unhandled field type %i\n", type);
+                MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 1022, 0, v18);
+            }
+            break;
+        }
+    }
+}
+
+void __cdecl Cmd_AI_Dispatch(int argc, actor_s *pSelf, const actor_fields_s *fields, const actor_fields_s *pField)
+{
+    unsigned __int8 *v8; // r3
+    unsigned __int8 *v9; // r3
+
+    if (argc < 3)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 1035, 0, "%s", "argc >= 3");
+    if (!pSelf)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 1036, 0, "%s", "pSelf");
+    if (!pSelf->ent)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 1037, 0, "%s", "pSelf->ent");
+    if (!pField)
+        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 1041, 0, "%s", "pField");
+    if (pField == &aifield_list)
+    {
+        if (fields)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 1046, 0, "%s", "fields == NULL");
+        Cmd_AI_DisplayInfo(pSelf);
+    }
+    else if (pField == &aifield_delete)
+    {
+        if (fields)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 1051, 0, "%s", "fields == NULL");
+        Cmd_AI_Delete(pSelf);
+    }
+    else if (argc == 3)
+    {
+        if (!fields)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 1056, 0, "%s", "fields != NULL");
+        v8 = BaseForFields((unsigned __int8 *)pSelf, fields);
+        Cmd_AI_DisplayValue(pSelf, v8, pField);
+    }
+    else
+    {
+        if (!fields)
+            MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_fields.cpp", 1061, 0, "%s", "fields != NULL");
+        v9 = BaseForFields((unsigned __int8 *)pSelf, fields);
+        Cmd_AI_SetValue(pSelf, argc, v9, pField);
+    }
+}
+
+void __cdecl Cmd_AI_EntityNumber(
+    int argc,
+    const actor_fields_s *fields,
+    const actor_fields_s *pField,
+    const char *szNum,
+    int bInvertSelection)
+{
+    unsigned int v9; // r3
+    unsigned int v10; // r30
+    actor_s *i; // r31
+    actor_s *actor; // r4
+
+    v9 = atol(szNum);
+    v10 = v9;
+    if (bInvertSelection)
+    {
+        for (i = Actor_FirstActor(-1); i; i = Actor_NextActor(i, -1))
+        {
+            if (i->ent->s.number != v10)
+                Cmd_AI_Dispatch(argc, i, fields, pField);
+        }
+    }
+    else if (v9 > 0x87F)
+    {
+        Cmd_AI_PrintUsage();
+        Com_PrintError(CON_CHANNEL_DONT_FILTER, "%i is not a valid entity number\n", v10);
+    }
+    else
+    {
+        actor = level.gentities[v9].actor;
+        if (actor)
+        {
+            Cmd_AI_Dispatch(argc, actor, fields, pField);
+        }
+        else
+        {
+            Cmd_AI_PrintUsage();
+            Com_PrintError(CON_CHANNEL_DONT_FILTER, "entity number %i is not an actor\n", v10);
+        }
+    }
+}
+
+void __cdecl Cmd_AI_Team(
+    int argc,
+    const actor_fields_s *fields,
+    const actor_fields_s *pField,
+    int iTeamFlags,
+    int bInvertSelection)
+{
+    int v8; // r30
+    actor_s *i; // r31
+
+    v8 = iTeamFlags;
+    if (bInvertSelection)
+        v8 = ~iTeamFlags;
+    for (i = Actor_FirstActor(v8); i; i = Actor_NextActor(i, v8))
+        Cmd_AI_Dispatch(argc, i, fields, pField);
+}
+
+void __cdecl Cmd_AI_Name(
+    int argc,
+    const actor_fields_s *fields,
+    const actor_fields_s *pField,
+    const char *szName,
+    int bInvertSelection)
+{
+    int offset; // [esp+4h] [ebp-Ch]
+    unsigned __int16 name; // [esp+8h] [ebp-8h] BYREF
+    actor_s *actor; // [esp+Ch] [ebp-4h]
+
+    if (I_strnicmp(szName, "actor_", 6))
+        offset = offsetof(gentity_s, targetname);
+    else
+        offset = offsetof(gentity_s, classname);
+
+    name = SL_GetString(szName, 0);
+    for (actor = Actor_FirstActor(-1); actor; actor = Actor_NextActor(actor, -1))
+    {
+        if ((*(unsigned __int16 *)((char *)actor->ent + offset) == name) == (bInvertSelection == 0))
+            Cmd_AI_Dispatch(argc, actor, fields, pField);
+    }
+    Scr_SetString(&name, 0);
+}
+
+
+
+void __cdecl Cmd_AI_f()
+{
+    int v0; // r27
+    int nesting; // r7
+    int v2; // r28
+    const actor_fields_s *FieldForName; // r31
+    const actor_fields_s *v4; // r30
+    const char *v5; // r29
+    char v6[256]; // [sp+50h] [-230h] BYREF
+    char v7; // [sp+150h] [-130h] BYREF
+    char v8; // [sp+151h] [-12Fh] BYREF
+
+    v0 = 0;
+    nesting = sv_cmd_args.nesting;
+    if (sv_cmd_args.nesting >= 8u)
+    {
+        MyAssertHandler(
+            "c:\\trees\\cod3\\cod3src\\src\\game\\../qcommon/cmd.h",
+            167,
+            0,
+            "sv_cmd_args.nesting doesn't index CMD_MAX_NESTING\n\t%i not in [0, %i)",
+            sv_cmd_args.nesting,
+            8);
+        nesting = sv_cmd_args.nesting;
+    }
+    v2 = sv_cmd_args.argc[nesting];
+    if (v2 < 3)
+    {
+        Cmd_AI_PrintUsage();
+        return;
+    }
+    SV_Cmd_ArgvBuffer(2, v6, 256);
+    if (!I_stricmp(v6, "list"))
+    {
+        FieldForName = &aifield_list;
+    LABEL_7:
+        v4 = 0;
+        goto LABEL_8;
+    }
+    if (!I_stricmp(v6, "delete"))
+    {
+        FieldForName = &aifield_delete;
+        goto LABEL_7;
+    }
+    v4 = aifields;
+    FieldForName = FindFieldForName(aifields, v6);
+    if (!FieldForName)
+    {
+        v4 = sentientfields;
+        FieldForName = FindFieldForName(sentientfields, v6);
+        if (!FieldForName)
+        {
+            v4 = entfields;
+            FieldForName = FindFieldForName(entfields, v6);
+            if (!FieldForName)
+            {
+                Cmd_AI_PrintUsage();
+                Com_PrintError(CON_CHANNEL_DONT_FILTER, "%s is not an actor or entity field\n", v6);
+                return;
+            }
+        }
+    }
+LABEL_8:
+    SV_Cmd_ArgvBuffer(1, &v7, 256);
+    v5 = &v7;
+    if (v7 == 33)
+    {
+        v0 = 1;
+        v5 = &v8;
+    }
+    if (isdigit(*v5))
+    {
+        Cmd_AI_EntityNumber(v2, v4, FieldForName, v5, v0);
+    }
+    else if (I_stricmp(v5, "all"))
+    {
+        if (I_stricmp(v5, "axis"))
+        {
+            if (I_stricmp(v5, "allies"))
+            {
+                if (I_stricmp(v5, "neutral"))
+                    Cmd_AI_Name(v2, v4, FieldForName, v5, v0);
+                else
+                    Cmd_AI_Team(v2, v4, FieldForName, 8, v0);
+            }
+            else
+            {
+                Cmd_AI_Team(v2, v4, FieldForName, 4, v0);
+            }
+        }
+        else
+        {
+            Cmd_AI_Team(v2, v4, FieldForName, 2, v0);
+        }
+    }
+    else
+    {
+        Cmd_AI_Team(v2, v4, FieldForName, -1, v0);
+    }
+}
+
+void __cdecl GScr_AddFieldsForActor()
+{
+    const actor_fields_s *f; // [esp+4h] [ebp-4h]
+
+    for (f = aifields; f->name; ++f)
+    {
+        iassert(!((f - aifields) & ENTFIELD_MASK));
+        iassert((f - aifields) == (unsigned short)(f - aifields));
+
+        Scr_AddClassField(CLASS_NUM_ENTITY, (char*)f->name, (unsigned __int16)(f - aifields) | ENTFIELD_ACTOR);
+    }
+}
+
+void __cdecl Scr_SetActorField(actor_s *actor, unsigned int offset)
+{
+    const actor_fields_s *f; // r4
+    void(__cdecl * setter)(actor_s *, const actor_fields_s *); // r11
+
+    iassert(actor);
+    iassert((unsigned)offset < ARRAY_COUNT(aifields) - 1);
+
+    f = &aifields[offset];
+    setter = f->setter;
+    if (setter)
+        (setter)(actor, f);
+    else
+        Scr_SetGenericField((unsigned __int8 *)actor, f->type, f->ofs);
+}
+
+void __cdecl Scr_GetActorField(actor_s *actor, unsigned int offset)
+{
+    const actor_fields_s *f; // r4
+    void(__cdecl * getter)(actor_s *, const actor_fields_s *); // r11
+
+    iassert(actor);
+    iassert((unsigned)offset < ARRAY_COUNT(aifields) - 1);
+
+    f = &aifields[offset];
+    getter = f->getter;
+    if (getter)
+        (getter)(actor, f);
+    else
+        Scr_GetGenericField((unsigned __int8 *)actor, f->type, f->ofs);
+}
+
