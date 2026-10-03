@@ -1,0 +1,13 @@
+* text=auto
+*.sh text eol=lf
+*.py text eol=lf
+*.mm text eol=lf
+*.cpp text eol=lf
+*.h text eol=lf
+*.cmake text eol=lf
+*.bat text eol=crlf
+*.png binary
+*.jpg binary
+*.ico binary
+*.bmp binary
+*.mhr binary

@@ -1,0 +1,21 @@
+{
+  "version": "1.0.3",
+  "build": "4",
+  "preparedFor": "GitHub source publication",
+  "baseSourceArchiveSHA256": "05bbc21cb621eaefb88991c267c913e831e63d82797e147e76eb6f34e99dedd8",
+  "runtimeSourcesUnchanged": true,
+  "additionalChanges": [
+    "README/build/publishing guides",
+    "gitignore/gitattributes",
+    "third-party notices and missing touch license restored",
+    "public source check and complete-source packager",
+    "host-test console warning adapter"
+  ],
+  "iOSConfiguration": "passed from clean tree with vendored OpenAL source",
+  "hostTests": "18/18 passed",
+  "productionMPRegressionTests": "browser, identity, downloads passed",
+  "gitHistoryIncluded": false,
+  "gameFilesIncluded": false,
+  "signingCredentialsIncluded": false,
+  "additionalRegressionTests": "sprint/scoreboard, SP+MP aim assist, spawn/killcam interpolation, touch sample queue passed"
+}

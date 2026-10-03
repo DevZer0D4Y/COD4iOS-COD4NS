@@ -1,0 +1,90 @@
+#pragma once
+
+#include <atomic>
+#include <cstdint>
+#include <format>
+#include <string>
+
+namespace con
+{
+    enum class LogLevel : std::uint8_t
+    {
+        DEBUG = 0,
+        INFO,
+        WARN,
+        ERROR
+    };
+
+    extern LogLevel _globalLogLevel;
+    extern std::atomic_size_t _warningCount;
+    extern std::atomic_size_t _errorCount;
+
+    void init();
+    void set_log_level(LogLevel value);
+    void set_use_color(bool value);
+
+    void reset_counts();
+    [[nodiscard]] size_t warning_count();
+    [[nodiscard]] size_t error_count();
+
+    void _debug_internal(const std::string& str);
+    void _info_internal(const std::string& str);
+    void _warn_internal(const std::string& str);
+    void _error_internal(const std::string& str);
+
+    inline void debug(const std::string& str)
+    {
+        if (static_cast<unsigned>(_globalLogLevel) > static_cast<unsigned>(LogLevel::DEBUG))
+            return;
+        _debug_internal(str);
+    }
+
+    template<class Arg0, class... OtherArgs> void debug(std::format_string<Arg0, OtherArgs...> fmt, Arg0&& arg0, OtherArgs&&... otherArgs)
+    {
+        if (static_cast<unsigned>(_globalLogLevel) > static_cast<unsigned>(LogLevel::DEBUG))
+            return;
+        _debug_internal(std::vformat(fmt.get(), std::make_format_args(arg0, otherArgs...)));
+    }
+
+    inline void info(const std::string& str)
+    {
+        if (static_cast<unsigned>(_globalLogLevel) > static_cast<unsigned>(LogLevel::INFO))
+            return;
+        _info_internal(str);
+    }
+
+    template<class Arg0, class... OtherArgs> void info(std::format_string<Arg0, OtherArgs...> fmt, Arg0&& arg0, OtherArgs&&... otherArgs)
+    {
+        if (static_cast<unsigned>(_globalLogLevel) > static_cast<unsigned>(LogLevel::INFO))
+            return;
+        _info_internal(std::vformat(fmt.get(), std::make_format_args(arg0, otherArgs...)));
+    }
+
+    inline void warn(const std::string& str)
+    {
+        ++_warningCount;
+        if (static_cast<unsigned>(_globalLogLevel) > static_cast<unsigned>(LogLevel::WARN))
+            return;
+        _warn_internal(str);
+    }
+
+    template<class Arg0, class... OtherArgs> void warn(std::format_string<Arg0, OtherArgs...> fmt, Arg0&& arg0, OtherArgs&&... otherArgs)
+    {
+        ++_warningCount;
+        if (static_cast<unsigned>(_globalLogLevel) > static_cast<unsigned>(LogLevel::WARN))
+            return;
+        _warn_internal(std::vformat(fmt.get(), std::make_format_args(arg0, otherArgs...)));
+    }
+
+    inline void error(const std::string& str)
+    {
+        ++_errorCount;
+        _error_internal(str);
+    }
+
+    template<class Arg0, class... OtherArgs> void error(std::format_string<Arg0, OtherArgs...> fmt, Arg0&& arg0, OtherArgs&&... otherArgs)
+    {
+        ++_errorCount;
+        _error_internal(std::vformat(fmt.get(), std::make_format_args(arg0, otherArgs...)));
+    }
+} // namespace con

@@ -1,0 +1,4906 @@
+/**
+ * OpenAL cross platform audio library
+ * Copyright (C) 1999-2007 by authors.
+ * This library is free software; you can redistribute it and/or
+ *  modify it under the terms of the GNU Library General Public
+ *  License as published by the Free Software Foundation; either
+ *  version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ *  Library General Public License for more details.
+ *
+ * You should have received a copy of the GNU Library General Public
+ *  License along with this library; if not, write to the
+ *  Free Software Foundation, Inc.,
+ *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * Or go to http://www.gnu.org/copyleft/lgpl.html
+ */
+
+#include "config.h"
+
+#include "source.h"
+
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <bitset>
+#include <chrono>
+#include <cmath>
+#include <concepts>
+#include <cstddef>
+#include <iterator>
+#include <functional>
+#include <limits>
+#include <memory>
+#include <mutex>
+#include <new>
+#include <numeric>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <type_traits>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include "AL/al.h"
+#include "AL/alext.h"
+#include "AL/efx.h"
+
+#include "alc/backends/base.h"
+#include "alc/device.h"
+#include "alc/inprogext.h"
+#include "almalloc.h"
+#include "alnumeric.h"
+#include "atomic.h"
+#include "auxeffectslot.h"
+#include "buffer.h"
+#include "core/buffer_storage.h"
+#include "core/except.h"
+#include "core/mixer/defs.h"
+#include "core/voice_change.h"
+#include "direct_defs.h"
+#include "filter.h"
+#include "flexarray.h"
+#include "intrusive_ptr.h"
+#include "opthelpers.h"
+
+#if ALSOFT_EAX
+#include "eax/api.h"
+#include "eax/call.h"
+#include "eax/fx_slot_index.h"
+#include "eax/utils.h"
+#endif
+
+#if HAVE_CXXMODULES
+import alc.context;
+import format.types;
+import gsl;
+import logging;
+#else
+#include "alc/context.hpp"
+#include "alformattypes.hpp"
+#include "core/logging.h"
+#include "gsl/gsl"
+#endif
+
+
+namespace {
+
+using SubListAllocator = al::allocator<std::array<al::Source,64>>;
+using std::chrono::nanoseconds;
+using seconds_d = std::chrono::duration<double>;
+
+using namespace std::string_view_literals;
+
+enum class SourceProp : ALenum {
+    Pitch = AL_PITCH,
+    Gain = AL_GAIN,
+    MinGain = AL_MIN_GAIN,
+    MaxGain = AL_MAX_GAIN,
+    MaxDistance = AL_MAX_DISTANCE,
+    RolloffFactor = AL_ROLLOFF_FACTOR,
+    DopplerFactor = AL_DOPPLER_FACTOR,
+    ConeOuterGain = AL_CONE_OUTER_GAIN,
+    SecOffset = AL_SEC_OFFSET,
+    SampleOffset = AL_SAMPLE_OFFSET,
+    ByteOffset = AL_BYTE_OFFSET,
+    ConeInnerAngle = AL_CONE_INNER_ANGLE,
+    ConeOuterAngle = AL_CONE_OUTER_ANGLE,
+    RefDistance = AL_REFERENCE_DISTANCE,
+
+    Position = AL_POSITION,
+    Velocity = AL_VELOCITY,
+    Direction = AL_DIRECTION,
+
+    SourceRelative = AL_SOURCE_RELATIVE,
+    Looping = AL_LOOPING,
+    Buffer = AL_BUFFER,
+    SourceState = AL_SOURCE_STATE,
+    BuffersQueued = AL_BUFFERS_QUEUED,
+    BuffersProcessed = AL_BUFFERS_PROCESSED,
+    SourceType = AL_SOURCE_TYPE,
+
+    /* ALC_EXT_EFX */
+    ConeOuterGainHF = AL_CONE_OUTER_GAINHF,
+    AirAbsorptionFactor = AL_AIR_ABSORPTION_FACTOR,
+    RoomRolloffFactor =  AL_ROOM_ROLLOFF_FACTOR,
+    DirectFilterGainHFAuto = AL_DIRECT_FILTER_GAINHF_AUTO,
+    AuxSendFilterGainAuto = AL_AUXILIARY_SEND_FILTER_GAIN_AUTO,
+    AuxSendFilterGainHFAuto = AL_AUXILIARY_SEND_FILTER_GAINHF_AUTO,
+    DirectFilter = AL_DIRECT_FILTER,
+    AuxSendFilter = AL_AUXILIARY_SEND_FILTER,
+
+    /* AL_SOFT_direct_channels */
+    DirectChannelsSOFT = AL_DIRECT_CHANNELS_SOFT,
+
+    /* AL_EXT_source_distance_model */
+    DistanceModel = AL_DISTANCE_MODEL,
+
+    /* AL_SOFT_source_latency */
+    SampleOffsetLatencySOFT = AL_SAMPLE_OFFSET_LATENCY_SOFT,
+    SecOffsetLatencySOFT = AL_SEC_OFFSET_LATENCY_SOFT,
+
+    /* AL_EXT_STEREO_ANGLES */
+    StereoAngles = AL_STEREO_ANGLES,
+
+    /* AL_EXT_SOURCE_RADIUS */
+    Radius = AL_SOURCE_RADIUS,
+
+    /* AL_EXT_BFORMAT */
+    Orientation = AL_ORIENTATION,
+
+    /* AL_SOFT_source_length */
+    ByteLength = AL_BYTE_LENGTH_SOFT,
+    SampleLength = AL_SAMPLE_LENGTH_SOFT,
+    SecLength = AL_SEC_LENGTH_SOFT,
+
+    /* AL_SOFT_source_resampler */
+    Resampler = AL_SOURCE_RESAMPLER_SOFT,
+
+    /* AL_SOFT_source_spatialize */
+    Spatialize = AL_SOURCE_SPATIALIZE_SOFT,
+
+    /* ALC_SOFT_device_clock */
+    SampleOffsetClockSOFT = AL_SAMPLE_OFFSET_CLOCK_SOFT,
+    SecOffsetClockSOFT = AL_SEC_OFFSET_CLOCK_SOFT,
+
+    /* AL_SOFT_UHJ */
+    StereoMode = AL_STEREO_MODE_SOFT,
+    SuperStereoWidth = AL_SUPER_STEREO_WIDTH_SOFT,
+
+    /* AL_SOFT_buffer_sub_data */
+    ByteRWOffsetsSOFT = AL_BYTE_RW_OFFSETS_SOFT,
+    SampleRWOffsetsSOFT = AL_SAMPLE_RW_OFFSETS_SOFT,
+
+    /* AL_SOFT_source_panning */
+    PanningEnabledSOFT = AL_PANNING_ENABLED_SOFT,
+    PanSOFT = AL_PAN_SOFT,
+};
+
+
+constexpr auto HasBuffer(al::BufferQueueItem const &item) noexcept -> bool
+{ return bool{item.mBuffer}; }
+
+
+auto GetSourceVoice(gsl::not_null<al::Source*> const source,
+    gsl::not_null<al::Context*> const context) -> Voice*
+{
+    auto const voicelist = context->getVoicesSpan();
+    if(auto const idx = source->mVoiceIdx; idx < voicelist.size())
+    {
+        if(auto *const voice = voicelist[idx];
+            voice->mSourceID.load(std::memory_order_acquire) == source->mId)
+            return voice;
+    }
+    source->mVoiceIdx = InvalidVoiceIndex;
+    return nullptr;
+}
+
+
+void UpdateSourceProps(gsl::not_null<al::Source const*> const source, Voice *const voice,
+    gsl::not_null<al::Context*> const context)
+{
+    /* Get an unused property container, or allocate a new one as needed. */
+    auto *props = context->mFreeVoiceProps.load(std::memory_order_acquire);
+    if(!props)
+    {
+        context->allocVoiceProps();
+        props = context->mFreeVoiceProps.load(std::memory_order_acquire);
+    }
+    VoicePropsItem *next;
+    do {
+        next = props->next.load(std::memory_order_relaxed);
+    } while(context->mFreeVoiceProps.compare_exchange_weak(props, next,
+        std::memory_order_acq_rel, std::memory_order_acquire) == false);
+
+    props->Pitch = source->mPitch;
+    props->Gain = source->mGain;
+    props->OuterGain = source->mOuterGain;
+    props->MinGain = source->mMinGain;
+    props->MaxGain = source->mMaxGain;
+    props->InnerAngle = source->mInnerAngle;
+    props->OuterAngle = source->mOuterAngle;
+    props->RefDistance = source->mRefDistance;
+    props->MaxDistance = source->mMaxDistance;
+    props->RolloffFactor = source->mRolloffFactor
+#if ALSOFT_EAX
+        + source->mRolloffFactor2
+#endif
+    ;
+    props->Position = source->mPosition;
+    props->Velocity = source->mVelocity;
+    props->Direction = source->mDirection;
+    props->OrientAt = source->mOrientAt;
+    props->OrientUp = source->mOrientUp;
+    props->HeadRelative = source->mHeadRelative;
+    props->mDistanceModel = source->mDistanceModel;
+    props->mResampler = source->mResampler;
+    props->DirectChannels = source->DirectChannels;
+    props->mSpatializeMode = source->mSpatialize;
+    props->mPanningEnabled = source->mPanningEnabled;
+
+    props->DryGainHFAuto = source->mDryGainHFAuto;
+    props->WetGainAuto = source->mWetGainAuto;
+    props->WetGainHFAuto = source->mWetGainHFAuto;
+    props->OuterGainHF = source->mOuterGainHF;
+
+    props->AirAbsorptionFactor = source->mAirAbsorptionFactor;
+    props->RoomRolloffFactor = source->mRoomRolloffFactor;
+    props->DopplerFactor = source->mDopplerFactor;
+
+    props->StereoPan = source->mStereoPan;
+
+    props->Radius = source->mRadius;
+    props->EnhWidth = source->mEnhWidth;
+    props->Panning = source->mPanningEnabled ? source->mPan : 0.0f;
+
+    props->Direct.Gain = source->mDirect.mGain;
+    props->Direct.GainHF = source->mDirect.mGainHF;
+    props->Direct.HFReference = source->mDirect.mHFReference;
+    props->Direct.GainLF = source->mDirect.mGainLF;
+    props->Direct.LFReference = source->mDirect.mLFReference;
+
+    std::ranges::transform(source->mSend, props->Send.begin(),
+        [](al::Source::SendData const &srcsend) noexcept
+    {
+        auto ret = VoiceProps::SendData{};
+        ret.Slot = srcsend.mSlot ? srcsend.mSlot->mSlot.get() : nullptr;
+        ret.Gain = srcsend.mGain;
+        ret.GainHF = srcsend.mGainHF;
+        ret.HFReference = srcsend.mHFReference;
+        ret.GainLF = srcsend.mGainLF;
+        ret.LFReference = srcsend.mLFReference;
+        return ret;
+    });
+    if(!props->Send[0].Slot && context->mDefaultSlot)
+        props->Send[0].Slot = context->mDefaultSlot->mSlot;
+
+    /* Set the new container for updating internal parameters. */
+    props = voice->mUpdate.exchange(props, std::memory_order_acq_rel);
+    if(props)
+    {
+        /* If there was an unused update container, put it back in the
+         * freelist.
+         */
+        AtomicReplaceHead(context->mFreeVoiceProps, props);
+    }
+}
+
+/* GetSourceSampleOffset
+ *
+ * Gets the current read offset for the given Source, in 32.32 fixed-point
+ * samples. The offset is relative to the start of the queue (not the start of
+ * the current buffer).
+ */
+auto GetSourceSampleOffset(gsl::not_null<al::Source*> const Source,
+    gsl::not_null<al::Context*> const context, nanoseconds *const clocktime) -> i64
+{
+    auto const device = al::get_not_null(context->mALDevice);
+    auto const *Current = LPVoiceBufferItem{};
+    auto readPos = i64{};
+    auto readPosFrac = u32{};
+    auto refcount = unsigned{};
+
+    do {
+        refcount = device->waitForMix();
+        *clocktime = device->getClockTime();
+        auto const *const voice = GetSourceVoice(Source, context);
+        if(not voice) return 0_i64;
+
+        Current = voice->mCurrentBuffer.load(std::memory_order_relaxed);
+        readPos = i64{voice->mPosition.load(std::memory_order_relaxed)};
+        readPosFrac = u32{voice->mPositionFrac.load(std::memory_order_relaxed)};
+
+        std::atomic_thread_fence(std::memory_order_acquire);
+    } while(refcount != device->mMixCount.load(std::memory_order_relaxed));
+
+    if(readPos < 0)
+        return (readPos * (u32::max()+1_i64)) + (readPosFrac.as<i64>() << (32-MixerFracBits));
+
+    std::ignore = std::ranges::find_if(Source->mQueue,
+        [Current,&readPos](const VoiceBufferItem &item)
+    {
+        if(&item == Current)
+            return true;
+        readPos += i64{item.mSampleLen};
+        return false;
+    });
+    if(readPos >= i64::max()>>32)
+        return i64::max();
+    return (readPos<<32) + (readPosFrac.as<i64>() << (32-MixerFracBits));
+}
+
+/* GetSourceSecOffset
+ *
+ * Gets the current read offset for the given Source, in seconds. The offset is
+ * relative to the start of the queue (not the start of the current buffer).
+ */
+auto GetSourceSecOffset(gsl::not_null<al::Source*> const Source,
+    gsl::not_null<al::Context*> const context, nanoseconds *const clocktime) -> double
+{
+    auto const device = al::get_not_null(context->mALDevice);
+    auto const *Current = LPVoiceBufferItem{};
+    auto readPos = i64{};
+    auto readPosFrac = u32{};
+    auto refcount = unsigned{};
+
+    do {
+        refcount = device->waitForMix();
+        *clocktime = device->getClockTime();
+        auto const *const voice = GetSourceVoice(Source, context);
+        if(not voice) return 0.0;
+
+        Current = voice->mCurrentBuffer.load(std::memory_order_relaxed);
+        readPos = i64{voice->mPosition.load(std::memory_order_relaxed)};
+        readPosFrac = u32{voice->mPositionFrac.load(std::memory_order_relaxed)};
+
+        std::atomic_thread_fence(std::memory_order_acquire);
+    } while(refcount != device->mMixCount.load(std::memory_order_relaxed));
+
+    const auto BufferFmt = std::invoke([Source]() -> al::Buffer*
+    {
+        if(const auto iter = std::ranges::find_if(Source->mQueue, HasBuffer);
+            iter != Source->mQueue.end())
+            return iter->mBuffer.get();
+        return nullptr;
+    });
+    Ensures(BufferFmt != nullptr);
+
+    std::ignore = std::ranges::find_if(Source->mQueue,
+        [Current,&readPos](al::BufferQueueItem const &item)
+    {
+        if(&item == Current)
+            return true;
+        readPos += i64{item.mSampleLen};
+        return false;
+    });
+    return (readPos.cast_to<f64>() + readPosFrac.as<f64>()/MixerFracOne).c_val
+        / BufferFmt->mSampleRate;
+}
+
+/* GetSourceOffset
+ *
+ * Gets the current read offset for the given Source, in the appropriate format
+ * (Bytes, Samples or Seconds). The offset is relative to the start of the
+ * queue (not the start of the current buffer).
+ */
+template<typename T> NOINLINE
+auto GetSourceOffset(gsl::not_null<al::Source*> const Source, SourceProp const name,
+    gsl::not_null<al::Context*> const context) -> T
+{
+    auto const device = al::get_not_null(context->mALDevice);
+    auto const *Current = LPVoiceBufferItem{};
+    auto readPos = i64{};
+    auto readPosFrac = u32{};
+    auto refcount = unsigned{};
+
+    do {
+        refcount = device->waitForMix();
+        auto const *const voice = GetSourceVoice(Source, context);
+        if(not voice) return T{0};
+
+        Current = voice->mCurrentBuffer.load(std::memory_order_relaxed);
+        readPos = i64{voice->mPosition.load(std::memory_order_relaxed)};
+        readPosFrac = u32{voice->mPositionFrac.load(std::memory_order_relaxed)};
+
+        std::atomic_thread_fence(std::memory_order_acquire);
+    } while(refcount != device->mMixCount.load(std::memory_order_relaxed));
+
+    const auto BufferFmt = std::invoke([Source]() -> al::Buffer*
+    {
+        if(const auto iter = std::ranges::find_if(Source->mQueue, HasBuffer);
+            iter != Source->mQueue.end())
+            return iter->mBuffer.get();
+        return nullptr;
+    });
+    std::ignore = std::ranges::find_if(Source->mQueue,
+        [Current,&readPos](al::BufferQueueItem const &item)
+    {
+        if(&item == Current)
+            return true;
+        readPos += i64{item.mSampleLen};
+        return false;
+    });
+
+    switch(name)
+    {
+    case SourceProp::SecOffset:
+        if constexpr(std::floating_point<T>)
+        {
+            const auto offset = gsl::narrow_cast<T>(readPos.c_val)
+                + gsl::narrow_cast<T>(readPosFrac.c_val)/T{MixerFracOne};
+            return offset / gsl::narrow_cast<T>(BufferFmt->mSampleRate);
+        }
+        else
+            return al::saturate_cast<T>(readPos.c_val / BufferFmt->mSampleRate);
+
+    case SourceProp::SampleOffset:
+        if constexpr(std::floating_point<T>)
+            return gsl::narrow_cast<T>(readPos.c_val)
+                + gsl::narrow_cast<T>(readPosFrac.c_val)/T{MixerFracOne};
+        else
+            return al::saturate_cast<T>(readPos.c_val);
+
+    case SourceProp::ByteOffset:
+        {
+            /* Round down to the block boundary. */
+            const auto BlockSize = BufferFmt->blockSizeFromFmt();
+            readPos = readPos / BufferFmt->mBlockAlign * BlockSize;
+
+            if constexpr(std::floating_point<T>)
+                return gsl::narrow_cast<T>(readPos.c_val);
+            else
+            {
+                if(readPos > std::numeric_limits<T>::max())
+                    return RoundToZero(std::numeric_limits<T>::max(),
+                        gsl::narrow_cast<T>(BlockSize));
+                if(readPos < std::numeric_limits<T>::min())
+                    return RoundToZero(std::numeric_limits<T>::min(),
+                        gsl::narrow_cast<T>(BlockSize));
+                return gsl::narrow_cast<T>(readPos.c_val);
+            }
+        }
+
+    default:
+        break;
+    }
+    return T{0};
+}
+
+/* GetSourceLength
+ *
+ * Gets the length of the given Source's buffer queue, in the appropriate
+ * format (Bytes, Samples or Seconds).
+ */
+template<typename T> NOINLINE
+auto GetSourceLength(gsl::not_null<const al::Source*> const source, SourceProp const name) -> T
+{
+    const auto BufferFmt = std::invoke([source]() -> al::Buffer*
+    {
+        if(auto const iter = std::ranges::find_if(source->mQueue, HasBuffer);
+            iter != source->mQueue.end())
+            return iter->mBuffer.get();
+        return nullptr;
+    });
+    if(!BufferFmt)
+        return T{0};
+
+    const auto length = std::accumulate(source->mQueue.begin(), source->mQueue.end(), 0_u64,
+        [](u64 const count, al::BufferQueueItem const &item) { return count + item.mSampleLen; });
+    if(length == 0)
+        return T{0};
+
+    switch(name)
+    {
+    case SourceProp::SecLength:
+        if constexpr(std::floating_point<T>)
+            return gsl::narrow_cast<T>(length.c_val) / gsl::narrow_cast<T>(BufferFmt->mSampleRate);
+        else
+            return al::saturate_cast<T>(length.c_val / BufferFmt->mSampleRate);
+
+    case SourceProp::SampleLength:
+        if constexpr(std::floating_point<T>)
+            return gsl::narrow_cast<T>(length.c_val);
+        else
+            return al::saturate_cast<T>(length.c_val);
+
+    case SourceProp::ByteLength:
+        {
+            /* Round down to the block boundary. */
+            const auto BlockSize = BufferFmt->blockSizeFromFmt();
+            const auto alignedlen = length / BufferFmt->mBlockAlign * BlockSize;
+
+            if constexpr(std::floating_point<T>)
+                return gsl::narrow_cast<T>(alignedlen.c_val);
+            else
+            {
+                if(alignedlen > std::numeric_limits<T>::max())
+                    return RoundToZero(std::numeric_limits<T>::max(),
+                        gsl::narrow_cast<T>(BlockSize));
+                return gsl::narrow_cast<T>(alignedlen.c_val);
+            }
+        }
+
+    default:
+        break;
+    }
+    return T{0};
+}
+
+
+struct VoicePos {
+    i32 pos;
+    u32 frac;
+    al::BufferQueueItem *bufferitem;
+};
+
+/**
+ * GetSampleOffset
+ *
+ * Retrieves the voice position, fixed-point fraction, and bufferlist item
+ * using the given offset type and offset. If the offset is out of range,
+ * returns an empty optional.
+ */
+auto GetSampleOffset(std::deque<al::BufferQueueItem> &BufferList, SourceProp const OffsetType,
+    f64 const Offset) -> std::optional<VoicePos>
+{
+    /* Find the first valid Buffer in the Queue */
+    const auto BufferFmt = std::invoke([&BufferList]() -> al::Buffer*
+    {
+        if(auto const iter = std::ranges::find_if(BufferList, HasBuffer);
+            iter != BufferList.end())
+            return iter->mBuffer.get();
+        return nullptr;
+    });
+    if(!BufferFmt) [[unlikely]]
+        return std::nullopt;
+
+    /* Get sample frame offset */
+    auto [offset, frac] = std::invoke([OffsetType,Offset,BufferFmt]() -> std::pair<i64,u32>
+    {
+        auto dbloff = f64{};
+        auto dblfrac = f64{};
+        switch(OffsetType)
+        {
+        case SourceProp::SecOffset:
+            dblfrac = (Offset*BufferFmt->mSampleRate).modf(dbloff);
+            if(dblfrac < 0.0)
+            {
+                /* If there's a negative fraction, reduce the offset to "floor"
+                 * it, and convert the fraction to a percentage to the next
+                 * greater value (e.g. -2.75 -> -2 + -0.75 -> -3 + 0.25).
+                 */
+                dbloff -= 1.0;
+                dblfrac += 1.0;
+            }
+            return {dbloff.reinterpret_as<i64>(),
+                std::min(dblfrac*MixerFracOne, MixerFracOne-1.0_f64).reinterpret_as<u32>()};
+
+        case SourceProp::SampleOffset:
+            dblfrac = Offset.modf(dbloff);
+            if(dblfrac < 0.0)
+            {
+                dbloff -= 1.0;
+                dblfrac += 1.0;
+            }
+            return {dbloff.reinterpret_as<i64>(),
+                std::min(dblfrac*MixerFracOne, MixerFracOne-1.0_f64).reinterpret_as<u32>()};
+
+        case SourceProp::ByteOffset:
+            {
+                /* Determine the ByteOffset (and ensure it is block aligned) */
+                const auto blockoffset = (Offset / BufferFmt->blockSizeFromFmt()).floor();
+                return {blockoffset.reinterpret_as<i64>()*i64{BufferFmt->mBlockAlign},
+                    0_u32};
+            }
+
+        default:
+            break;
+        }
+        return {0_i64, 0_u32};
+    });
+
+    /* Find the bufferlist item this offset belongs to. */
+    if(offset < 0)
+    {
+        if(offset < i32::min())
+            return std::nullopt;
+        return VoicePos{.pos = offset.reinterpret_as<i32>(), .frac = frac,
+            .bufferitem = &BufferList.front()};
+    }
+
+    if(BufferFmt->mCallback)
+        return std::nullopt;
+
+    const auto iter = std::ranges::find_if(BufferList, [&offset](al::BufferQueueItem const &item)
+    {
+        if(item.mSampleLen > offset)
+            return true;
+        offset -= i64{item.mSampleLen};
+        return false;
+    });
+    if(iter != BufferList.end())
+    {
+        /* Offset is in this buffer */
+        return VoicePos{.pos = offset.reinterpret_as<i32>(), .frac = frac, .bufferitem = &*iter};
+    }
+
+    /* Offset is out of range of the queue */
+    return std::nullopt;
+}
+
+
+void InitVoice(Voice *const voice, gsl::not_null<al::Source*> const source,
+    al::BufferQueueItem const *const BufferList, gsl::not_null<al::Context*> const context,
+    gsl::not_null<al::Device*> const device)
+{
+    voice->mLoopBuffer.store(source->mLooping ? &source->mQueue.front() : nullptr,
+        std::memory_order_relaxed);
+
+    auto const *const buffer = BufferList->mBuffer.get();
+    voice->mFrequency = buffer->mSampleRate;
+    if(buffer->mChannels == FmtStereo && source->mStereoMode == SourceStereo::Enhanced)
+        voice->mFmtChannels = FmtSuperStereo;
+    else
+        voice->mFmtChannels = buffer->mChannels;
+    voice->mFrameStep = buffer->channelsFromFmt();
+    voice->mBytesPerBlock = buffer->blockSizeFromFmt();
+    voice->mSamplesPerBlock = buffer->mBlockAlign;
+    voice->mAmbiLayout = IsUHJ(voice->mFmtChannels) ? AmbiLayout::FuMa : buffer->mAmbiLayout;
+    voice->mAmbiScaling = IsUHJ(voice->mFmtChannels) ? AmbiScaling::N3D : buffer->mAmbiScaling;
+    voice->mAmbiOrder = (voice->mFmtChannels == FmtSuperStereo) ? 1 : buffer->mAmbiOrder;
+
+    if(buffer->mCallback) voice->mFlags.set(VoiceFlag::IsCallback);
+    else if(source->mSourceType == AL_STATIC) voice->mFlags.set(VoiceFlag::IsStatic);
+    voice->mNumCallbackBlocks = 0;
+    voice->mCallbackBlockOffset = 0;
+
+    voice->prepare(device);
+
+    source->mPropsDirty = false;
+    UpdateSourceProps(source, voice, context);
+
+    voice->mSourceID.store(source->mId, std::memory_order_release);
+}
+
+
+auto GetVoiceChanger(gsl::not_null<al::Context*> const ctx) -> VoiceChange*
+{
+    auto *vchg = ctx->mVoiceChangeTail;
+    if(vchg == ctx->mCurrentVoiceChange.load(std::memory_order_acquire)) [[unlikely]]
+    {
+        ctx->allocVoiceChanges();
+        vchg = ctx->mVoiceChangeTail;
+    }
+
+    ctx->mVoiceChangeTail = vchg->mNext.exchange(nullptr, std::memory_order_relaxed);
+
+    return vchg;
+}
+
+void SendVoiceChanges(gsl::not_null<al::Context*> ctx, VoiceChange *tail)
+{
+    auto const device = al::get_not_null(ctx->mALDevice);
+
+    auto *oldhead = ctx->mCurrentVoiceChange.load(std::memory_order_acquire);
+    while(auto *next = oldhead->mNext.load(std::memory_order_relaxed))
+        oldhead = next;
+    oldhead->mNext.store(tail, std::memory_order_release);
+
+    const auto connected = device->Connected.load(std::memory_order_acquire);
+    std::ignore = device->waitForMix();
+    if(!connected) [[unlikely]]
+    {
+        if(ctx->mStopVoicesOnDisconnect.load(std::memory_order_acquire))
+        {
+            /* If the device is disconnected and voices are stopped, just
+             * ignore all pending changes.
+             */
+            auto *cur = ctx->mCurrentVoiceChange.load(std::memory_order_acquire);
+            while(auto *next = cur->mNext.load(std::memory_order_acquire))
+            {
+                cur = next;
+                if(auto *voice = cur->mVoice)
+                    voice->mSourceID.store(0, std::memory_order_relaxed);
+            }
+            ctx->mCurrentVoiceChange.store(cur, std::memory_order_release);
+        }
+    }
+}
+
+
+auto SetVoiceOffset(Voice *const oldvoice, const VoicePos &vpos,
+    gsl::not_null<al::Source*> const source, gsl::not_null<al::Context*> const context,
+    gsl::not_null<al::Device*> const device) -> bool
+{
+    /* First, get a free voice to start at the new offset. */
+    auto voicelist = context->getVoicesSpan();
+    Voice *newvoice{};
+    auto vidx = 0u;
+    for(Voice *voice : voicelist)
+    {
+        if(voice->mPlayState.load(std::memory_order_acquire) == Voice::Stopped
+            && voice->mSourceID.load(std::memory_order_relaxed) == 0u
+            && voice->mPendingChange.load(std::memory_order_relaxed) == false)
+        {
+            newvoice = voice;
+            break;
+        }
+        ++vidx;
+    }
+    if(!newvoice) [[unlikely]]
+    {
+        auto &allvoices = *context->mVoices.load(std::memory_order_relaxed);
+        if(allvoices.size() == voicelist.size())
+            context->allocVoices(1);
+        context->mActiveVoiceCount.fetch_add(1, std::memory_order_release);
+        voicelist = context->getVoicesSpan();
+
+        vidx = 0;
+        for(Voice *voice : voicelist)
+        {
+            if(voice->mPlayState.load(std::memory_order_acquire) == Voice::Stopped
+                && voice->mSourceID.load(std::memory_order_relaxed) == 0u
+                && voice->mPendingChange.load(std::memory_order_relaxed) == false)
+            {
+                newvoice = voice;
+                break;
+            }
+            ++vidx;
+        }
+        ASSUME(newvoice != nullptr);
+    }
+
+    /* Initialize the new voice and set its starting offset.
+     * TODO: It might be better to have the VoiceChange processing copy the old
+     * voice's mixing parameters (and pending update) insead of initializing it
+     * all here. This would just need to set the minimum properties to link the
+     * voice to the source and its position-dependent properties (including the
+     * fading flag).
+     */
+    newvoice->mPlayState.store(Voice::Pending, std::memory_order_relaxed);
+    newvoice->mPosition.store(vpos.pos.c_val, std::memory_order_relaxed);
+    newvoice->mPositionFrac.store(vpos.frac.c_val, std::memory_order_relaxed);
+    newvoice->mCurrentBuffer.store(vpos.bufferitem, std::memory_order_relaxed);
+    newvoice->mStartTime = oldvoice->mStartTime;
+    newvoice->mFlags.reset();
+    if(vpos.pos > 0 || (vpos.pos == 0 && vpos.frac > 0)
+        || vpos.bufferitem != &source->mQueue.front())
+        newvoice->mFlags.set(VoiceFlag::IsFading);
+    InitVoice(newvoice, source, vpos.bufferitem, context, device);
+    source->mVoiceIdx = vidx;
+
+    /* Set the old voice as having a pending change, and send it off with the
+     * new one with a new offset voice change.
+     */
+    oldvoice->mPendingChange.store(true, std::memory_order_relaxed);
+
+    auto *vchg = GetVoiceChanger(context);
+    vchg->mOldVoice = oldvoice;
+    vchg->mVoice = newvoice;
+    vchg->mSourceID = source->mId;
+    vchg->mState = VChangeState::Restart;
+    SendVoiceChanges(context, vchg);
+
+    /* If the old voice still has a sourceID, it's still active and the change-
+     * over will work on the next update.
+     */
+    if(oldvoice->mSourceID.load(std::memory_order_acquire) != 0u) [[likely]]
+        return true;
+
+    /* Otherwise, if the new voice's state is not pending, the change-over
+     * already happened.
+     */
+    if(newvoice->mPlayState.load(std::memory_order_acquire) != Voice::Pending)
+        return true;
+
+    /* Otherwise, wait for any current mix to finish and check one last time. */
+    std::ignore = device->waitForMix();
+    if(newvoice->mPlayState.load(std::memory_order_acquire) != Voice::Pending)
+        return true;
+    /* The change-over failed because the old voice stopped before the new
+     * voice could start at the new offset. Let go of the new voice and have
+     * the caller store the source offset since it's stopped.
+     */
+    newvoice->mCurrentBuffer.store(nullptr, std::memory_order_relaxed);
+    newvoice->mLoopBuffer.store(nullptr, std::memory_order_relaxed);
+    newvoice->mSourceID.store(0u, std::memory_order_relaxed);
+    newvoice->mPlayState.store(Voice::Stopped, std::memory_order_relaxed);
+    return false;
+}
+
+
+/**
+ * Returns if the last known state for the source was playing or paused. Does
+ * not sync with the mixer voice.
+ */
+auto IsPlayingOrPaused(gsl::not_null<al::Source const*> const source) noexcept -> bool
+{ return source->mState == AL_PLAYING || source->mState == AL_PAUSED; }
+
+/**
+ * Returns an updated source state using the matching voice's status (or lack
+ * thereof).
+ */
+auto GetSourceState(gsl::not_null<al::Source*> const source, Voice const *const voice) -> ALenum
+{
+    if(!voice && source->mState == AL_PLAYING)
+        source->mState = AL_STOPPED;
+    return source->mState;
+}
+
+
+auto EnsureSources(gsl::not_null<al::Context*> const context, usize const needed) -> bool
+{
+    auto count = std::accumulate(context->mSourceList.cbegin(), context->mSourceList.cend(),
+        0_usize, [](usize const cur, const SourceSubList &sublist) noexcept -> usize
+        { return cur + sublist.mFreeMask.popcount(); });
+
+    try {
+        while(needed > count)
+        {
+            if(context->mSourceList.size() >= 1<<25) [[unlikely]]
+                return false;
+
+            auto sublist = SourceSubList{};
+            sublist.mFreeMask = ~0_u64;
+            sublist.mSources = SubListAllocator{}.allocate(1);
+            context->mSourceList.emplace_back(std::move(sublist));
+            count += std::tuple_size_v<SubListAllocator::value_type>;
+        }
+    }
+    catch(...) {
+        return false;
+    }
+    return true;
+}
+
+[[nodiscard]]
+auto AllocSource(gsl::not_null<al::Context*> const context) noexcept -> gsl::not_null<al::Source*>
+{
+    auto const sublist = std::ranges::find_if(context->mSourceList,
+        [](SourceSubList const &slist) { return slist.mFreeMask != 0; });
+    auto const lidx = gsl::narrow_cast<ALuint>(std::distance(context->mSourceList.begin(),
+        sublist));
+    auto const slidx = sublist->mFreeMask.countr_zero().c_val;
+    ASSUME(slidx < 64);
+
+    auto const source = gsl::make_not_null(std::construct_at(
+        std::to_address(std::next(sublist->mSources->begin(), as_signed(slidx)))));
+#if ALSOFT_EAX
+    source->eaxInitialize(context);
+#endif // ALSOFT_EAX
+
+    /* Add 1 to avoid source ID 0. */
+    source->mId = ((lidx<<6) | slidx) + 1;
+
+    context->mNumSources += 1;
+    sublist->mFreeMask &= ~(1_u64 << slidx);
+
+    return source;
+}
+
+void FreeSource(gsl::not_null<al::Context*> const context, gsl::not_null<al::Source*> const source)
+{
+    context->mSourceNames.erase(source->mId);
+
+    auto const id = source->mId - 1;
+    auto const lidx = std::size_t{id >> 6};
+    auto const slidx = id & 0x3f;
+
+    if(auto *const voice = GetSourceVoice(source, context))
+    {
+        auto *const vchg = GetVoiceChanger(context);
+
+        voice->mPendingChange.store(true, std::memory_order_relaxed);
+        vchg->mVoice = voice;
+        vchg->mSourceID = source->mId;
+        vchg->mState = VChangeState::Stop;
+
+        SendVoiceChanges(context, vchg);
+    }
+
+    std::destroy_at(std::to_address(source));
+
+    context->mSourceList[lidx].mFreeMask |= 1_u64 << slidx;
+    context->mNumSources--;
+}
+
+
+[[nodiscard]]
+auto LookupSource(std::nothrow_t, gsl::not_null<al::Context*> const context, ALuint const id)
+    noexcept -> al::Source*
+{
+    const auto lidx = (id-1) >> 6;
+    const auto slidx = (id-1) & 0x3f;
+
+    if(lidx >= context->mSourceList.size()) [[unlikely]]
+        return nullptr;
+    auto &sublist = context->mSourceList[lidx];
+    if((sublist.mFreeMask & (1_u64 << slidx)) != 0) [[unlikely]]
+        return nullptr;
+    return std::to_address(sublist.mSources->begin() + as_signed(slidx));
+}
+
+[[nodiscard]]
+auto LookupSource(gsl::not_null<al::Context*> const context, ALuint const id)
+    -> gsl::not_null<al::Source*>
+{
+    if(auto *source = LookupSource(std::nothrow, context, id)) [[likely]]
+        return gsl::make_not_null(source);
+    context->throw_error(AL_INVALID_NAME, "Invalid source ID {}", id);
+}
+
+[[nodiscard]]
+auto LookupBuffer(std::nothrow_t, gsl::not_null<al::Device*> const device,
+    std::unsigned_integral auto const id) noexcept -> al::Buffer*
+{
+    const auto lidx = (id-1) >> 6;
+    const auto slidx = (id-1) & 0x3f;
+
+    if(lidx >= device->BufferList.size()) [[unlikely]]
+        return nullptr;
+    auto &sublist = device->BufferList[gsl::narrow_cast<std::size_t>(lidx)];
+    if((sublist.mFreeMask & (1_u64 << slidx)) != 0) [[unlikely]]
+        return nullptr;
+    return std::to_address(std::next(sublist.mBuffers->begin(),
+        gsl::narrow_cast<std::ptrdiff_t>(slidx)));
+}
+
+[[nodiscard]]
+auto LookupBuffer(gsl::not_null<al::Context*> const context, std::unsigned_integral auto const id)
+    -> gsl::not_null<al::Buffer*>
+{
+    if(auto *const buffer = LookupBuffer(std::nothrow, al::get_not_null(context->mALDevice), id))
+        [[likely]] return gsl::make_not_null(buffer);
+    context->throw_error(AL_INVALID_NAME, "Invalid buffer ID {}", id);
+}
+
+[[nodiscard]]
+auto LookupFilter(std::nothrow_t, gsl::not_null<al::Device*> const device,
+    std::unsigned_integral auto const id) noexcept -> al::Filter*
+{
+    const auto lidx = (id-1) >> 6;
+    const auto slidx = (id-1) & 0x3f;
+
+    if(lidx >= device->FilterList.size()) [[unlikely]]
+        return nullptr;
+    auto &sublist = device->FilterList[gsl::narrow_cast<std::size_t>(lidx)];
+    if((sublist.mFreeMask & (1_u64 << slidx)) != 0) [[unlikely]]
+        return nullptr;
+    return std::to_address(std::next(sublist.mFilters->begin(),
+        gsl::narrow_cast<std::ptrdiff_t>(slidx)));
+}
+
+[[nodiscard]]
+auto LookupFilter(gsl::not_null<al::Context*> const context, std::unsigned_integral auto const id)
+    -> gsl::not_null<al::Filter*>
+{
+    if(auto *filter = LookupFilter(std::nothrow, al::get_not_null(context->mALDevice), id))
+        [[likely]] return gsl::make_not_null(filter);
+    context->throw_error(AL_INVALID_NAME, "Invalid filter ID {}", id);
+}
+
+[[nodiscard]]
+auto LookupEffectSlot(std::nothrow_t, gsl::not_null<al::Context*> const context,
+    std::unsigned_integral auto const id) noexcept -> al::EffectSlot*
+{
+    const auto lidx = (id-1) >> 6;
+    const auto slidx = (id-1) & 0x3f;
+
+    if(lidx >= context->mEffectSlotList.size()) [[unlikely]]
+        return nullptr;
+    auto &sublist = context->mEffectSlotList[gsl::narrow_cast<std::size_t>(lidx)];
+    if((sublist.mFreeMask & (1_u64 << slidx)) != 0) [[unlikely]]
+        return nullptr;
+    return std::to_address(std::next(sublist.mEffectSlots->begin(),
+        gsl::narrow_cast<std::ptrdiff_t>(slidx)));
+}
+
+[[nodiscard]]
+auto LookupEffectSlot(gsl::not_null<al::Context*> const context,
+    std::unsigned_integral auto const id) -> gsl::not_null<al::EffectSlot*>
+{
+    if(auto *const slot = LookupEffectSlot(std::nothrow, context, id)) [[likely]]
+        return gsl::make_not_null(slot);
+    context->throw_error(AL_INVALID_NAME, "Invalid effect slot ID {}", id);
+}
+
+
+auto StereoModeFromEnum(std::signed_integral auto const mode) noexcept
+    -> std::optional<SourceStereo>
+{
+    switch(mode)
+    {
+    case AL_NORMAL_SOFT: return SourceStereo::Normal;
+    case AL_SUPER_STEREO_SOFT: return SourceStereo::Enhanced;
+    }
+    return std::nullopt;
+}
+auto EnumFromStereoMode(SourceStereo const mode) -> ALenum
+{
+    switch(mode)
+    {
+    case SourceStereo::Normal: return AL_NORMAL_SOFT;
+    case SourceStereo::Enhanced: return AL_SUPER_STEREO_SOFT;
+    }
+    throw std::runtime_error{al::format("Invalid SourceStereo: {:#x}", al::to_underlying(mode))};
+}
+
+auto SpatializeModeFromEnum(std::signed_integral auto const mode) noexcept
+    -> std::optional<SpatializeMode>
+{
+    switch(mode)
+    {
+    case AL_FALSE: return SpatializeMode::Off;
+    case AL_TRUE: return SpatializeMode::On;
+    case AL_AUTO_SOFT: return SpatializeMode::Auto;
+    }
+    return std::nullopt;
+}
+auto EnumFromSpatializeMode(SpatializeMode const mode) -> ALenum
+{
+    switch(mode)
+    {
+    case SpatializeMode::Off: return AL_FALSE;
+    case SpatializeMode::On: return AL_TRUE;
+    case SpatializeMode::Auto: return AL_AUTO_SOFT;
+    }
+    throw std::runtime_error{al::format("Invalid SpatializeMode: {}",
+        int{al::to_underlying(mode)})};
+}
+
+auto DirectModeFromEnum(std::signed_integral auto const mode) noexcept
+    -> std::optional<DirectMode>
+{
+    switch(mode)
+    {
+    case AL_FALSE: return DirectMode::Off;
+    case AL_DROP_UNMATCHED_SOFT: return DirectMode::DropMismatch;
+    case AL_REMIX_UNMATCHED_SOFT: return DirectMode::RemixMismatch;
+    }
+    return std::nullopt;
+}
+auto EnumFromDirectMode(DirectMode const mode) -> ALenum
+{
+    switch(mode)
+    {
+    case DirectMode::Off: return AL_FALSE;
+    case DirectMode::DropMismatch: return AL_DROP_UNMATCHED_SOFT;
+    case DirectMode::RemixMismatch: return AL_REMIX_UNMATCHED_SOFT;
+    }
+    throw std::runtime_error{al::format("Invalid DirectMode: {}", int{al::to_underlying(mode)})};
+}
+
+auto DistanceModelFromALenum(std::signed_integral auto const model) noexcept
+    -> std::optional<DistanceModel>
+{
+    switch(model)
+    {
+    case AL_NONE: return DistanceModel::Disable;
+    case AL_INVERSE_DISTANCE: return DistanceModel::Inverse;
+    case AL_INVERSE_DISTANCE_CLAMPED: return DistanceModel::InverseClamped;
+    case AL_LINEAR_DISTANCE: return DistanceModel::Linear;
+    case AL_LINEAR_DISTANCE_CLAMPED: return DistanceModel::LinearClamped;
+    case AL_EXPONENT_DISTANCE: return DistanceModel::Exponent;
+    case AL_EXPONENT_DISTANCE_CLAMPED: return DistanceModel::ExponentClamped;
+    }
+    return std::nullopt;
+}
+auto ALenumFromDistanceModel(DistanceModel const model) -> ALenum
+{
+    switch(model)
+    {
+    case DistanceModel::Disable: return AL_NONE;
+    case DistanceModel::Inverse: return AL_INVERSE_DISTANCE;
+    case DistanceModel::InverseClamped: return AL_INVERSE_DISTANCE_CLAMPED;
+    case DistanceModel::Linear: return AL_LINEAR_DISTANCE;
+    case DistanceModel::LinearClamped: return AL_LINEAR_DISTANCE_CLAMPED;
+    case DistanceModel::Exponent: return AL_EXPONENT_DISTANCE;
+    case DistanceModel::ExponentClamped: return AL_EXPONENT_DISTANCE_CLAMPED;
+    }
+    throw std::runtime_error{al::format("Unexpected distance model: {}",
+        int{al::to_underlying(model)})};
+}
+
+[[nodiscard]]
+constexpr auto IntValsByProp(ALenum const prop) -> ALuint
+{
+    switch(SourceProp{prop})
+    {
+    case SourceProp::SourceState:
+    case SourceProp::SourceType:
+    case SourceProp::BuffersQueued:
+    case SourceProp::BuffersProcessed:
+    case SourceProp::ByteLength:
+    case SourceProp::SampleLength:
+    case SourceProp::SourceRelative:
+    case SourceProp::Looping:
+    case SourceProp::Buffer:
+    case SourceProp::SampleOffset:
+    case SourceProp::ByteOffset:
+    case SourceProp::DirectFilter:
+    case SourceProp::DirectFilterGainHFAuto:
+    case SourceProp::AuxSendFilterGainAuto:
+    case SourceProp::AuxSendFilterGainHFAuto:
+    case SourceProp::DirectChannelsSOFT:
+    case SourceProp::DistanceModel:
+    case SourceProp::Resampler:
+    case SourceProp::Spatialize:
+    case SourceProp::StereoMode:
+    case SourceProp::PanningEnabledSOFT:
+    case SourceProp::PanSOFT:
+        return 1;
+
+    case SourceProp::Radius: /*ByteRWOffsetsSOFT:*/
+        if(sBufferSubDataCompat)
+            return 2;
+        [[fallthrough]];
+    case SourceProp::ConeInnerAngle:
+    case SourceProp::ConeOuterAngle:
+    case SourceProp::Pitch:
+    case SourceProp::Gain:
+    case SourceProp::MinGain:
+    case SourceProp::MaxGain:
+    case SourceProp::RefDistance:
+    case SourceProp::RolloffFactor:
+    case SourceProp::ConeOuterGain:
+    case SourceProp::MaxDistance:
+    case SourceProp::SecOffset:
+    case SourceProp::DopplerFactor:
+    case SourceProp::ConeOuterGainHF:
+    case SourceProp::AirAbsorptionFactor:
+    case SourceProp::RoomRolloffFactor:
+    case SourceProp::SecLength:
+    case SourceProp::SuperStereoWidth:
+        return 1; /* 1x float */
+
+    case SourceProp::SampleRWOffsetsSOFT:
+        if(sBufferSubDataCompat)
+            return 2;
+        break;
+
+    case SourceProp::AuxSendFilter:
+        return 3;
+
+    case SourceProp::Position:
+    case SourceProp::Velocity:
+    case SourceProp::Direction:
+        return 3; /* 3x float */
+
+    case SourceProp::Orientation:
+        return 6; /* 6x float */
+
+    case SourceProp::SampleOffsetLatencySOFT:
+    case SourceProp::SampleOffsetClockSOFT:
+    case SourceProp::StereoAngles:
+        break; /* i64 only */
+    case SourceProp::SecOffsetLatencySOFT:
+    case SourceProp::SecOffsetClockSOFT:
+        break; /* double only */
+    }
+
+    return 0;
+}
+
+[[nodiscard]]
+constexpr auto Int64ValsByProp(ALenum const prop) -> ALuint
+{
+    switch(SourceProp{prop})
+    {
+    case SourceProp::SourceState:
+    case SourceProp::SourceType:
+    case SourceProp::BuffersQueued:
+    case SourceProp::BuffersProcessed:
+    case SourceProp::ByteLength:
+    case SourceProp::SampleLength:
+    case SourceProp::SourceRelative:
+    case SourceProp::Looping:
+    case SourceProp::Buffer:
+    case SourceProp::SampleOffset:
+    case SourceProp::ByteOffset:
+    case SourceProp::DirectFilter:
+    case SourceProp::DirectFilterGainHFAuto:
+    case SourceProp::AuxSendFilterGainAuto:
+    case SourceProp::AuxSendFilterGainHFAuto:
+    case SourceProp::DirectChannelsSOFT:
+    case SourceProp::DistanceModel:
+    case SourceProp::Resampler:
+    case SourceProp::Spatialize:
+    case SourceProp::StereoMode:
+    case SourceProp::PanningEnabledSOFT:
+    case SourceProp::PanSOFT:
+        return 1;
+
+    case SourceProp::Radius: /*ByteRWOffsetsSOFT:*/
+        if(sBufferSubDataCompat)
+            return 2;
+        [[fallthrough]];
+    case SourceProp::ConeInnerAngle:
+    case SourceProp::ConeOuterAngle:
+    case SourceProp::Pitch:
+    case SourceProp::Gain:
+    case SourceProp::MinGain:
+    case SourceProp::MaxGain:
+    case SourceProp::RefDistance:
+    case SourceProp::RolloffFactor:
+    case SourceProp::ConeOuterGain:
+    case SourceProp::MaxDistance:
+    case SourceProp::SecOffset:
+    case SourceProp::DopplerFactor:
+    case SourceProp::ConeOuterGainHF:
+    case SourceProp::AirAbsorptionFactor:
+    case SourceProp::RoomRolloffFactor:
+    case SourceProp::SecLength:
+    case SourceProp::SuperStereoWidth:
+        return 1; /* 1x float */
+
+    case SourceProp::SampleRWOffsetsSOFT:
+        if(sBufferSubDataCompat)
+            return 2;
+        break;
+
+    case SourceProp::SampleOffsetLatencySOFT:
+    case SourceProp::SampleOffsetClockSOFT:
+    case SourceProp::StereoAngles:
+        return 2;
+
+    case SourceProp::AuxSendFilter:
+        return 3;
+
+    case SourceProp::Position:
+    case SourceProp::Velocity:
+    case SourceProp::Direction:
+        return 3; /* 3x float */
+
+    case SourceProp::Orientation:
+        return 6; /* 6x float */
+
+    case SourceProp::SecOffsetLatencySOFT:
+    case SourceProp::SecOffsetClockSOFT:
+        break; /* double only */
+    }
+
+    return 0;
+}
+
+[[nodiscard]]
+constexpr auto FloatValsByProp(ALenum const prop) -> ALuint
+{
+    switch(SourceProp{prop})
+    {
+    case SourceProp::Pitch:
+    case SourceProp::Gain:
+    case SourceProp::MinGain:
+    case SourceProp::MaxGain:
+    case SourceProp::MaxDistance:
+    case SourceProp::RolloffFactor:
+    case SourceProp::DopplerFactor:
+    case SourceProp::ConeOuterGain:
+    case SourceProp::SecOffset:
+    case SourceProp::SampleOffset:
+    case SourceProp::ByteOffset:
+    case SourceProp::ConeInnerAngle:
+    case SourceProp::ConeOuterAngle:
+    case SourceProp::RefDistance:
+    case SourceProp::ConeOuterGainHF:
+    case SourceProp::AirAbsorptionFactor:
+    case SourceProp::RoomRolloffFactor:
+    case SourceProp::DirectFilterGainHFAuto:
+    case SourceProp::AuxSendFilterGainAuto:
+    case SourceProp::AuxSendFilterGainHFAuto:
+    case SourceProp::DirectChannelsSOFT:
+    case SourceProp::DistanceModel:
+    case SourceProp::SourceRelative:
+    case SourceProp::Looping:
+    case SourceProp::SourceState:
+    case SourceProp::BuffersQueued:
+    case SourceProp::BuffersProcessed:
+    case SourceProp::SourceType:
+    case SourceProp::Resampler:
+    case SourceProp::Spatialize:
+    case SourceProp::ByteLength:
+    case SourceProp::SampleLength:
+    case SourceProp::SecLength:
+    case SourceProp::StereoMode:
+    case SourceProp::SuperStereoWidth:
+    case SourceProp::PanningEnabledSOFT:
+    case SourceProp::PanSOFT:
+        return 1;
+
+    case SourceProp::Radius: /*ByteRWOffsetsSOFT:*/
+        if(!sBufferSubDataCompat)
+            return 1;
+        [[fallthrough]];
+    case SourceProp::SampleRWOffsetsSOFT:
+        break;
+
+    case SourceProp::StereoAngles:
+        return 2;
+
+    case SourceProp::Position:
+    case SourceProp::Velocity:
+    case SourceProp::Direction:
+        return 3;
+
+    case SourceProp::Orientation:
+        return 6;
+
+    case SourceProp::SecOffsetLatencySOFT:
+    case SourceProp::SecOffsetClockSOFT:
+        break; /* Double only */
+
+    case SourceProp::Buffer:
+    case SourceProp::DirectFilter:
+    case SourceProp::AuxSendFilter:
+        break; /* i/i64 only */
+    case SourceProp::SampleOffsetLatencySOFT:
+    case SourceProp::SampleOffsetClockSOFT:
+        break; /* i64 only */
+    }
+    return 0;
+}
+[[nodiscard]]
+constexpr auto DoubleValsByProp(ALenum const prop) -> ALuint
+{
+    switch(SourceProp{prop})
+    {
+    case SourceProp::Pitch:
+    case SourceProp::Gain:
+    case SourceProp::MinGain:
+    case SourceProp::MaxGain:
+    case SourceProp::MaxDistance:
+    case SourceProp::RolloffFactor:
+    case SourceProp::DopplerFactor:
+    case SourceProp::ConeOuterGain:
+    case SourceProp::SecOffset:
+    case SourceProp::SampleOffset:
+    case SourceProp::ByteOffset:
+    case SourceProp::ConeInnerAngle:
+    case SourceProp::ConeOuterAngle:
+    case SourceProp::RefDistance:
+    case SourceProp::ConeOuterGainHF:
+    case SourceProp::AirAbsorptionFactor:
+    case SourceProp::RoomRolloffFactor:
+    case SourceProp::DirectFilterGainHFAuto:
+    case SourceProp::AuxSendFilterGainAuto:
+    case SourceProp::AuxSendFilterGainHFAuto:
+    case SourceProp::DirectChannelsSOFT:
+    case SourceProp::DistanceModel:
+    case SourceProp::SourceRelative:
+    case SourceProp::Looping:
+    case SourceProp::SourceState:
+    case SourceProp::BuffersQueued:
+    case SourceProp::BuffersProcessed:
+    case SourceProp::SourceType:
+    case SourceProp::Resampler:
+    case SourceProp::Spatialize:
+    case SourceProp::ByteLength:
+    case SourceProp::SampleLength:
+    case SourceProp::SecLength:
+    case SourceProp::StereoMode:
+    case SourceProp::SuperStereoWidth:
+    case SourceProp::PanningEnabledSOFT:
+    case SourceProp::PanSOFT:
+        return 1;
+
+    case SourceProp::Radius: /*ByteRWOffsetsSOFT:*/
+        if(!sBufferSubDataCompat)
+            return 1;
+        [[fallthrough]];
+    case SourceProp::SampleRWOffsetsSOFT:
+        break;
+
+    case SourceProp::SecOffsetLatencySOFT:
+    case SourceProp::SecOffsetClockSOFT:
+    case SourceProp::StereoAngles:
+        return 2;
+
+    case SourceProp::Position:
+    case SourceProp::Velocity:
+    case SourceProp::Direction:
+        return 3;
+
+    case SourceProp::Orientation:
+        return 6;
+
+    case SourceProp::Buffer:
+    case SourceProp::DirectFilter:
+    case SourceProp::AuxSendFilter:
+        break; /* i/i64 only */
+    case SourceProp::SampleOffsetLatencySOFT:
+    case SourceProp::SampleOffsetClockSOFT:
+        break; /* i64 only */
+    }
+    return 0;
+}
+
+
+void UpdateSourceProps(gsl::not_null<al::Source*> const source,
+    gsl::not_null<al::Context*> const context)
+{
+    if(!context->mDeferUpdates)
+    {
+        if(auto *const voice = GetSourceVoice(source, context))
+        {
+            UpdateSourceProps(source, voice, context);
+            return;
+        }
+    }
+    source->mPropsDirty = true;
+}
+#if ALSOFT_EAX
+void CommitAndUpdateSourceProps(gsl::not_null<al::Source*> const source,
+    gsl::not_null<al::Context*> const context)
+{
+    if(!context->mDeferUpdates)
+    {
+        if(context->hasEax())
+            source->eaxCommit();
+        if(auto *const voice = GetSourceVoice(source, context))
+        {
+            UpdateSourceProps(source, voice, context);
+            return;
+        }
+    }
+    source->mPropsDirty = true;
+}
+
+#else
+
+void CommitAndUpdateSourceProps(gsl::not_null<al::Source*> const source,
+    gsl::not_null<al::Context*> const context)
+{ UpdateSourceProps(source, context); }
+#endif
+
+
+template<typename T>
+auto PropTypeName() -> std::string_view = delete;
+template<>
+auto PropTypeName<ALint>() -> std::string_view { return "integer"sv; }
+template<>
+auto PropTypeName<ALint64SOFT>() -> std::string_view { return "int64"sv; }
+template<>
+auto PropTypeName<ALfloat>() -> std::string_view { return "float"sv; }
+template<>
+auto PropTypeName<ALdouble>() -> std::string_view { return "double"sv; }
+
+
+template<typename T, typename U>
+struct PairStruct { T First; U Second; };
+
+template<typename T, typename U>
+PairStruct(T, U) -> PairStruct<T, U>;
+
+/**
+ * Returns a pair of lambdas to check the following setter.
+ *
+ * The first lambda checks the size of the span is valid for the required size,
+ * throwing a context error if it fails.
+ *
+ * The second lambda tests the validity of the value check, throwing a context
+ * error if it failed.
+ */
+template<typename T, std::size_t N>
+auto GetCheckers(gsl::not_null<al::Context*> const context, SourceProp const prop,
+    std::span<T,N> const values)
+{
+    return PairStruct{
+        [=](std::size_t const expect) -> void
+        {
+            if(values.size() == expect) return;
+            context->throw_error(AL_INVALID_ENUM, "Property {:#04x} expects {} value{}, got {}",
+                as_unsigned(al::to_underlying(prop)), expect, (expect==1) ? "" : "s",
+                values.size());
+        },
+        [context](bool const passed) -> void
+        {
+            if(passed) return;
+            context->throw_error(AL_INVALID_VALUE, "Value out of range");
+        }
+    };
+}
+
+template<typename T> NOINLINE
+void SetProperty(const gsl::not_null<al::Source*> Source,
+    gsl::not_null<al::Context*> const Context, SourceProp const prop,
+    std::span<T const> const values)
+{
+    static constexpr auto is_finite = []<typename U>(U&& v) -> bool
+    { return std::isfinite(gsl::narrow_cast<float>(std::forward<U>(v))); };
+    auto [CheckSize, CheckValue] = GetCheckers(Context, prop, values);
+    auto const device = al::get_not_null(Context->mALDevice);
+
+    switch(prop)
+    {
+    case SourceProp::SourceState:
+    case SourceProp::SourceType:
+    case SourceProp::BuffersQueued:
+    case SourceProp::BuffersProcessed:
+        if constexpr(std::is_integral_v<T>)
+        {
+            /* Query only */
+            Context->throw_error(AL_INVALID_OPERATION,
+                "Setting read-only source property {:#04x}", as_unsigned(al::to_underlying(prop)));
+        }
+        break;
+
+    case SourceProp::ByteLength:
+    case SourceProp::SampleLength:
+    case SourceProp::SecLength:
+    case SourceProp::SampleOffsetLatencySOFT:
+    case SourceProp::SecOffsetLatencySOFT:
+    case SourceProp::SampleOffsetClockSOFT:
+    case SourceProp::SecOffsetClockSOFT:
+        /* Query only */
+        Context->throw_error(AL_INVALID_OPERATION, "Setting read-only source property {:#04x}",
+            as_unsigned(al::to_underlying(prop)));
+
+    case SourceProp::Pitch:
+        CheckSize(1);
+        if constexpr(std::is_floating_point_v<T>)
+            CheckValue(values[0] >= T{0} && is_finite(values[0]));
+        else
+            CheckValue(values[0] >= T{0});
+
+        Source->mPitch = gsl::narrow_cast<float>(values[0]);
+        return UpdateSourceProps(Source, Context);
+
+    case SourceProp::ConeInnerAngle:
+        CheckSize(1);
+        CheckValue(values[0] >= T{0} && values[0] <= T{360});
+
+        Source->mInnerAngle = gsl::narrow_cast<float>(values[0]);
+        return CommitAndUpdateSourceProps(Source, Context);
+
+    case SourceProp::ConeOuterAngle:
+        CheckSize(1);
+        CheckValue(values[0] >= T{0} && values[0] <= T{360});
+
+        Source->mOuterAngle = gsl::narrow_cast<float>(values[0]);
+        return CommitAndUpdateSourceProps(Source, Context);
+
+    case SourceProp::Gain:
+        CheckSize(1);
+        if constexpr(std::is_floating_point_v<T>)
+            CheckValue(values[0] >= T{0} && is_finite(values[0]));
+        else
+            CheckValue(values[0] >= T{0});
+
+        Source->mGain = gsl::narrow_cast<float>(values[0]);
+        return UpdateSourceProps(Source, Context);
+
+    case SourceProp::MaxDistance:
+        CheckSize(1);
+        if constexpr(std::is_floating_point_v<T>)
+            CheckValue(values[0] >= T{0} && is_finite(values[0]));
+        else
+            CheckValue(values[0] >= T{0});
+
+        Source->mMaxDistance = gsl::narrow_cast<float>(values[0]);
+        return CommitAndUpdateSourceProps(Source, Context);
+
+    case SourceProp::RolloffFactor:
+        CheckSize(1);
+        if constexpr(std::is_floating_point_v<T>)
+            CheckValue(values[0] >= T{0} && is_finite(values[0]));
+        else
+            CheckValue(values[0] >= T{0});
+
+        Source->mRolloffFactor = gsl::narrow_cast<float>(values[0]);
+        return CommitAndUpdateSourceProps(Source, Context);
+
+    case SourceProp::RefDistance:
+        CheckSize(1);
+        if constexpr(std::is_floating_point_v<T>)
+            CheckValue(values[0] >= T{0} && is_finite(values[0]));
+        else
+            CheckValue(values[0] >= T{0});
+
+        Source->mRefDistance = gsl::narrow_cast<float>(values[0]);
+        return CommitAndUpdateSourceProps(Source, Context);
+
+    case SourceProp::MinGain:
+        CheckSize(1);
+        if constexpr(std::is_floating_point_v<T>)
+            CheckValue(values[0] >= T{0} && is_finite(values[0]));
+        else
+            CheckValue(values[0] >= T{0});
+
+        Source->mMinGain = gsl::narrow_cast<float>(values[0]);
+        return UpdateSourceProps(Source, Context);
+
+    case SourceProp::MaxGain:
+        CheckSize(1);
+        if constexpr(std::is_floating_point_v<T>)
+            CheckValue(values[0] >= T{0} && is_finite(values[0]));
+        else
+            CheckValue(values[0] >= T{0});
+
+        Source->mMaxGain = gsl::narrow_cast<float>(values[0]);
+        return UpdateSourceProps(Source, Context);
+
+    case SourceProp::ConeOuterGain:
+        CheckSize(1);
+        CheckValue(values[0] >= T{0} && values[0] <= T{1});
+
+        Source->mOuterGain = gsl::narrow_cast<float>(values[0]);
+        return UpdateSourceProps(Source, Context);
+
+    case SourceProp::ConeOuterGainHF:
+        CheckSize(1);
+        CheckValue(values[0] >= T{0} && values[0] <= T{1});
+
+        Source->mOuterGainHF = gsl::narrow_cast<float>(values[0]);
+        return UpdateSourceProps(Source, Context);
+
+    case SourceProp::AirAbsorptionFactor:
+        CheckSize(1);
+        CheckValue(values[0] >= T{0} && values[0] <= T{10});
+
+        Source->mAirAbsorptionFactor = gsl::narrow_cast<float>(values[0]);
+        return UpdateSourceProps(Source, Context);
+
+    case SourceProp::RoomRolloffFactor:
+        CheckSize(1);
+        CheckValue(values[0] >= T{0} && values[0] <= T{1});
+
+        Source->mRoomRolloffFactor = gsl::narrow_cast<float>(values[0]);
+        return UpdateSourceProps(Source, Context);
+
+    case SourceProp::DopplerFactor:
+        CheckSize(1);
+        CheckValue(values[0] >= T{0} && values[0] <= T{1});
+
+        Source->mDopplerFactor = gsl::narrow_cast<float>(values[0]);
+        return UpdateSourceProps(Source, Context);
+
+
+    case SourceProp::SourceRelative:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            CheckValue(values[0] == AL_FALSE || values[0] == AL_TRUE);
+
+            Source->mHeadRelative = values[0] != AL_FALSE;
+            return CommitAndUpdateSourceProps(Source, Context);
+        }
+        break;
+
+    case SourceProp::Looping:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            CheckValue(values[0] == AL_FALSE || values[0] == AL_TRUE);
+
+            Source->mLooping = values[0] != AL_FALSE;
+            if(Voice *voice{GetSourceVoice(Source, Context)})
+            {
+                if(Source->mLooping)
+                    voice->mLoopBuffer.store(&Source->mQueue.front(), std::memory_order_release);
+                else
+                    voice->mLoopBuffer.store(nullptr, std::memory_order_release);
+
+                /* If the source is playing, wait for the current mix to finish
+                 * to ensure it isn't currently looping back or reaching the
+                 * end.
+                 */
+                std::ignore = device->waitForMix();
+            }
+            return;
+        }
+        break;
+
+    case SourceProp::Buffer:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            if(const auto state = GetSourceState(Source, GetSourceVoice(Source, Context));
+                state == AL_PLAYING || state == AL_PAUSED)
+                Context->throw_error(AL_INVALID_OPERATION,
+                    "Setting buffer on playing or paused source {}", Source->mId);
+
+            if(values[0])
+            {
+                auto buflock = std::lock_guard{device->BufferLock};
+                auto buffer = LookupBuffer(Context, as_unsigned(values[0]));
+                if(buffer->mMappedAccess && !(buffer->mMappedAccess&AL_MAP_PERSISTENT_BIT_SOFT))
+                    Context->throw_error(AL_INVALID_OPERATION,
+                        "Setting non-persistently mapped buffer {}", buffer->mId);
+                if(buffer->mCallback && buffer->mRef.load(std::memory_order_relaxed) != 0)
+                    Context->throw_error(AL_INVALID_OPERATION,
+                        "Setting already-set callback buffer {}", buffer->mId);
+
+                /* Add the selected buffer to a one-item queue */
+                auto newlist = std::deque<al::BufferQueueItem>{};
+                auto &item = newlist.emplace_back();
+                item.mBuffer = buffer->newReference();
+                item.mCallback = buffer->mCallback;
+                item.mUserData = buffer->mUserData;
+                item.mBlockAlign = buffer->mBlockAlign;
+                item.mSampleLen = buffer->mSampleLen;
+                item.mLoopStart = buffer->mLoopStart;
+                item.mLoopEnd = buffer->mLoopEnd;
+                item.mSamples = buffer->mData;
+
+                /* Source is now Static */
+                Source->mSourceType = AL_STATIC;
+                Source->mQueue = std::move(newlist);
+            }
+            else
+            {
+                /* Source is now Undetermined */
+                Source->mSourceType = AL_UNDETERMINED;
+                std::deque<al::BufferQueueItem>{}.swap(Source->mQueue);
+            }
+            return;
+        }
+        break;
+
+
+    case SourceProp::SecOffset:
+    case SourceProp::SampleOffset:
+    case SourceProp::ByteOffset:
+        CheckSize(1);
+        if constexpr(std::is_floating_point_v<T>)
+            CheckValue(std::isfinite(values[0]));
+
+        if(auto *voice = GetSourceVoice(Source, Context))
+        {
+            auto const vpos = GetSampleOffset(Source->mQueue, prop,
+                f64{gsl::narrow_cast<double>(values[0])});
+            if(!vpos) Context->throw_error(AL_INVALID_VALUE, "Invalid offset");
+
+            if(SetVoiceOffset(voice, *vpos, Source, Context, device))
+                return;
+        }
+        Source->mOffsetType = al::to_underlying(prop);
+        Source->mOffset = gsl::narrow_cast<double>(values[0]);
+        return;
+
+    case SourceProp::SampleRWOffsetsSOFT:
+        if(sBufferSubDataCompat)
+        {
+            if constexpr(std::is_integral_v<T>)
+            {
+                /* Query only */
+                Context->throw_error(AL_INVALID_OPERATION,
+                    "Setting read-only source property {:#04x}",
+                    as_unsigned(al::to_underlying(prop)));
+            }
+        }
+        break;
+
+    case SourceProp::Radius: /*ByteRWOffsetsSOFT:*/
+        if(sBufferSubDataCompat)
+        {
+            if constexpr(std::is_integral_v<T>)
+            {
+                /* Query only */
+                Context->throw_error(AL_INVALID_OPERATION,
+                    "Setting read-only source property {:#04x}",
+                    as_unsigned(al::to_underlying(prop)));
+            }
+            break;
+        }
+        CheckSize(1);
+        if constexpr(std::is_floating_point_v<T>)
+            CheckValue(values[0] >= T{0} && is_finite(values[0]));
+        else
+            CheckValue(values[0] >= T{0});
+
+        Source->mRadius = gsl::narrow_cast<float>(values[0]);
+        return UpdateSourceProps(Source, Context);
+
+    case SourceProp::SuperStereoWidth:
+        CheckSize(1);
+        CheckValue(values[0] >= T{0} && values[0] <= T{1});
+
+        Source->mEnhWidth = gsl::narrow_cast<float>(values[0]);
+        return UpdateSourceProps(Source, Context);
+
+    case SourceProp::PanningEnabledSOFT:
+        CheckSize(1);
+        CheckValue(values[0] == AL_FALSE || values[0] == AL_TRUE);
+
+        Source->mPanningEnabled = values[0] != AL_FALSE;
+        return UpdateSourceProps(Source, Context);
+
+    case SourceProp::PanSOFT:
+        CheckSize(1);
+        CheckValue(values[0] >= T{-1} && values[0] <= T{1});
+
+        Source->mPan = gsl::narrow_cast<float>(values[0]);
+        return UpdateSourceProps(Source, Context);
+
+    case SourceProp::StereoAngles:
+        CheckSize(2);
+        if constexpr(std::is_floating_point_v<T>)
+            CheckValue(std::ranges::all_of(values, is_finite));
+
+        Source->mStereoPan[0] = gsl::narrow_cast<float>(values[0]);
+        Source->mStereoPan[1] = gsl::narrow_cast<float>(values[1]);
+        return UpdateSourceProps(Source, Context);
+
+
+    case SourceProp::Position:
+        CheckSize(3);
+        if constexpr(std::is_floating_point_v<T>)
+            CheckValue(std::ranges::all_of(values, is_finite));
+
+        Source->mPosition[0] = gsl::narrow_cast<float>(values[0]);
+        Source->mPosition[1] = gsl::narrow_cast<float>(values[1]);
+        Source->mPosition[2] = gsl::narrow_cast<float>(values[2]);
+        return CommitAndUpdateSourceProps(Source, Context);
+
+    case SourceProp::Velocity:
+        CheckSize(3);
+        if constexpr(std::is_floating_point_v<T>)
+            CheckValue(std::ranges::all_of(values, is_finite));
+
+        Source->mVelocity[0] = gsl::narrow_cast<float>(values[0]);
+        Source->mVelocity[1] = gsl::narrow_cast<float>(values[1]);
+        Source->mVelocity[2] = gsl::narrow_cast<float>(values[2]);
+        return CommitAndUpdateSourceProps(Source, Context);
+
+    case SourceProp::Direction:
+        CheckSize(3);
+        if constexpr(std::is_floating_point_v<T>)
+            CheckValue(std::ranges::all_of(values, is_finite));
+
+        Source->mDirection[0] = gsl::narrow_cast<float>(values[0]);
+        Source->mDirection[1] = gsl::narrow_cast<float>(values[1]);
+        Source->mDirection[2] = gsl::narrow_cast<float>(values[2]);
+        return CommitAndUpdateSourceProps(Source, Context);
+
+    case SourceProp::Orientation:
+        CheckSize(6);
+        if constexpr(std::is_floating_point_v<T>)
+            CheckValue(std::ranges::all_of(values, is_finite));
+
+        Source->mOrientAt[0] = gsl::narrow_cast<float>(values[0]);
+        Source->mOrientAt[1] = gsl::narrow_cast<float>(values[1]);
+        Source->mOrientAt[2] = gsl::narrow_cast<float>(values[2]);
+        Source->mOrientUp[0] = gsl::narrow_cast<float>(values[3]);
+        Source->mOrientUp[1] = gsl::narrow_cast<float>(values[4]);
+        Source->mOrientUp[2] = gsl::narrow_cast<float>(values[5]);
+        return UpdateSourceProps(Source, Context);
+
+
+    case SourceProp::DirectFilter:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            const auto filterid = as_unsigned(values[0]);
+            if(values[0])
+            {
+                const auto filterlock = std::lock_guard{device->FilterLock};
+                const auto filter = LookupFilter(Context, filterid);
+                Source->mDirect.mGain = filter->mGain;
+                Source->mDirect.mGainHF = filter->mGainHF;
+                Source->mDirect.mHFReference = filter->mHFReference;
+                Source->mDirect.mGainLF = filter->mGainLF;
+                Source->mDirect.mLFReference = filter->mLFReference;
+            }
+            else
+            {
+                Source->mDirect.mGain = 1.0f;
+                Source->mDirect.mGainHF = 1.0f;
+                Source->mDirect.mHFReference = LowPassFreqRef;
+                Source->mDirect.mGainLF = 1.0f;
+                Source->mDirect.mLFReference = HighPassFreqRef;
+            }
+            return UpdateSourceProps(Source, Context);
+        }
+        break;
+
+    case SourceProp::DirectFilterGainHFAuto:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            CheckValue(values[0] == AL_FALSE || values[0] == AL_TRUE);
+
+            Source->mDryGainHFAuto = values[0] != AL_FALSE;
+            return UpdateSourceProps(Source, Context);
+        }
+        break;
+
+    case SourceProp::AuxSendFilterGainAuto:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            CheckValue(values[0] == AL_FALSE || values[0] == AL_TRUE);
+
+            Source->mWetGainAuto = values[0] != AL_FALSE;
+            return UpdateSourceProps(Source, Context);
+        }
+        break;
+
+    case SourceProp::AuxSendFilterGainHFAuto:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            CheckValue(values[0] == AL_FALSE || values[0] == AL_TRUE);
+
+            Source->mWetGainHFAuto = values[0] != AL_FALSE;
+            return UpdateSourceProps(Source, Context);
+        }
+        break;
+
+    case SourceProp::DirectChannelsSOFT:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            if(auto mode = DirectModeFromEnum(values[0]))
+            {
+                Source->DirectChannels = *mode;
+                return UpdateSourceProps(Source, Context);
+            }
+            Context->throw_error(AL_INVALID_VALUE, "Invalid direct channels mode: {:#x}",
+                as_unsigned(values[0]));
+        }
+        break;
+
+    case SourceProp::DistanceModel:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            if(auto model = DistanceModelFromALenum(values[0]))
+            {
+                Source->mDistanceModel = *model;
+                if(Context->mSourceDistanceModel)
+                    UpdateSourceProps(Source, Context);
+                return;
+            }
+            Context->throw_error(AL_INVALID_VALUE, "Invalid distance model: {:#x}",
+                as_unsigned(values[0]));
+        }
+        break;
+
+    case SourceProp::Resampler:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            CheckValue(values[0] >= 0 && values[0] <= al::to_underlying(Resampler::Max));
+
+            Source->mResampler = gsl::narrow_cast<Resampler>(values[0]);
+            return UpdateSourceProps(Source, Context);
+        }
+        break;
+
+    case SourceProp::Spatialize:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            if(auto mode = SpatializeModeFromEnum(values[0]))
+            {
+                Source->mSpatialize = *mode;
+                return UpdateSourceProps(Source, Context);
+            }
+            Context->throw_error(AL_INVALID_VALUE, "Invalid source spatialize mode: {}",
+                values[0]);
+        }
+        break;
+
+    case SourceProp::StereoMode:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            if(const ALenum state{GetSourceState(Source, GetSourceVoice(Source, Context))};
+                state == AL_PLAYING || state == AL_PAUSED)
+                Context->throw_error(AL_INVALID_OPERATION,
+                    "Modifying stereo mode on playing or paused source {}", Source->mId);
+
+            if(auto mode = StereoModeFromEnum(values[0]))
+            {
+                Source->mStereoMode = *mode;
+                return;
+            }
+            Context->throw_error(AL_INVALID_VALUE, "Invalid stereo mode: {:#x}",
+                as_unsigned(values[0]));
+        }
+        break;
+
+    case SourceProp::AuxSendFilter:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(3);
+            const auto slotid = as_unsigned(values[0]);
+            const auto sendidx = as_unsigned(values[1]);
+            const auto filterid = as_unsigned(values[2]);
+
+            const auto slotlock = std::unique_lock{Context->mEffectSlotLock};
+            auto slot = al::intrusive_ptr<al::EffectSlot>{};
+            if(slotid)
+                slot = LookupEffectSlot(Context, slotid)->newReference();
+
+            if(sendidx >= device->NumAuxSends)
+                Context->throw_error(AL_INVALID_VALUE, "Invalid send {}", sendidx);
+            auto &send = Source->mSend[gsl::narrow_cast<std::size_t>(sendidx)];
+
+            if(filterid)
+            {
+                const auto filterlock = std::lock_guard{device->FilterLock};
+                const auto filter = LookupFilter(Context, filterid);
+                send.mGain = filter->mGain;
+                send.mGainHF = filter->mGainHF;
+                send.mHFReference = filter->mHFReference;
+                send.mGainLF = filter->mGainLF;
+                send.mLFReference = filter->mLFReference;
+            }
+            else
+            {
+                /* Disable filter */
+                send.mGain = 1.0f;
+                send.mGainHF = 1.0f;
+                send.mHFReference = LowPassFreqRef;
+                send.mGainLF = 1.0f;
+                send.mLFReference = HighPassFreqRef;
+            }
+
+            /* We must force an update if the current auxiliary slot is valid
+             * and about to be changed on an active source, in case the old
+             * slot is about to be deleted.
+             */
+            if(send.mSlot && slot != send.mSlot && IsPlayingOrPaused(Source))
+            {
+                send.mSlot = std::move(slot);
+                if(auto *const voice = GetSourceVoice(Source, Context))
+                    UpdateSourceProps(Source, voice, Context);
+                else
+                    Source->mPropsDirty = true;
+            }
+            else
+            {
+                send.mSlot = std::move(slot);
+                UpdateSourceProps(Source, Context);
+            }
+            return;
+        }
+        break;
+    }
+
+    Context->throw_error(AL_INVALID_ENUM, "Invalid source {} property {:#04x}", PropTypeName<T>(),
+        as_unsigned(al::to_underlying(prop)));
+}
+
+
+template<typename T, std::size_t N>
+auto GetSizeChecker(gsl::not_null<al::Context*> const context, SourceProp const prop,
+    std::span<T,N> const values)
+{
+    return [=](std::size_t const expect) -> void
+    {
+        if(values.size() == expect) [[likely]] return;
+        context->throw_error(AL_INVALID_ENUM, "Property {:#04x} expects {} value{}, got {}",
+            as_unsigned(al::to_underlying(prop)), expect, (expect==1) ? "" : "s", values.size());
+    };
+}
+
+template<typename T> NOINLINE
+void GetProperty(const gsl::not_null<al::Source*> Source,
+    gsl::not_null<al::Context*> const Context, SourceProp const prop, std::span<T> const values)
+{
+    using std::chrono::duration_cast;
+    auto CheckSize = GetSizeChecker(Context, prop, values);
+    auto const device = al::get_not_null(Context->mALDevice);
+
+    switch(prop)
+    {
+    case SourceProp::Gain:
+        CheckSize(1);
+        values[0] = gsl::narrow_cast<T>(Source->mGain);
+        return;
+
+    case SourceProp::Pitch:
+        CheckSize(1);
+        values[0] = gsl::narrow_cast<T>(Source->mPitch);
+        return;
+
+    case SourceProp::MaxDistance:
+        CheckSize(1);
+        values[0] = gsl::narrow_cast<T>(Source->mMaxDistance);
+        return;
+
+    case SourceProp::RolloffFactor:
+        CheckSize(1);
+        values[0] = gsl::narrow_cast<T>(Source->mRolloffFactor);
+        return;
+
+    case SourceProp::RefDistance:
+        CheckSize(1);
+        values[0] = gsl::narrow_cast<T>(Source->mRefDistance);
+        return;
+
+    case SourceProp::ConeInnerAngle:
+        CheckSize(1);
+        values[0] = gsl::narrow_cast<T>(Source->mInnerAngle);
+        return;
+
+    case SourceProp::ConeOuterAngle:
+        CheckSize(1);
+        values[0] = gsl::narrow_cast<T>(Source->mOuterAngle);
+        return;
+
+    case SourceProp::MinGain:
+        CheckSize(1);
+        values[0] = gsl::narrow_cast<T>(Source->mMinGain);
+        return;
+
+    case SourceProp::MaxGain:
+        CheckSize(1);
+        values[0] = gsl::narrow_cast<T>(Source->mMaxGain);
+        return;
+
+    case SourceProp::ConeOuterGain:
+        CheckSize(1);
+        values[0] = gsl::narrow_cast<T>(Source->mOuterGain);
+        return;
+
+    case SourceProp::SecOffset:
+    case SourceProp::SampleOffset:
+    case SourceProp::ByteOffset:
+        CheckSize(1);
+        values[0] = GetSourceOffset<T>(Source, prop, Context);
+        return;
+
+    case SourceProp::ConeOuterGainHF:
+        CheckSize(1);
+        values[0] = gsl::narrow_cast<T>(Source->mOuterGainHF);
+        return;
+
+    case SourceProp::AirAbsorptionFactor:
+        CheckSize(1);
+        values[0] = gsl::narrow_cast<T>(Source->mAirAbsorptionFactor);
+        return;
+
+    case SourceProp::RoomRolloffFactor:
+        CheckSize(1);
+        values[0] = gsl::narrow_cast<T>(Source->mRoomRolloffFactor);
+        return;
+
+    case SourceProp::DopplerFactor:
+        CheckSize(1);
+        values[0] = gsl::narrow_cast<T>(Source->mDopplerFactor);
+        return;
+
+    case SourceProp::SampleRWOffsetsSOFT:
+        if constexpr(std::is_integral_v<T>)
+        {
+            if(sBufferSubDataCompat)
+            {
+                CheckSize(2);
+                values[0] = GetSourceOffset<T>(Source, SourceProp::SampleOffset, Context);
+                /* FIXME: values[1] should be ahead of values[0] by the device
+                 * update time. It needs to clamp or wrap the length of the
+                 * buffer queue.
+                 */
+                values[1] = values[0];
+                return;
+            }
+        }
+        break;
+    case SourceProp::Radius: /*ByteRWOffsetsSOFT:*/
+        if constexpr(std::is_floating_point_v<T>)
+        {
+            if(sBufferSubDataCompat)
+                break;
+
+            CheckSize(1);
+            values[0] = Source->mRadius;
+        }
+        else
+        {
+            if(sBufferSubDataCompat)
+            {
+                CheckSize(2);
+                values[0] = GetSourceOffset<T>(Source, SourceProp::ByteOffset, Context);
+                /* FIXME: values[1] should be ahead of values[0] by the device
+                 * update time. It needs to clamp or wrap the length of the
+                 * buffer queue.
+                 */
+                values[1] = values[0];
+            }
+            else
+            {
+                CheckSize(1);
+                values[0] = gsl::narrow_cast<T>(Source->mRadius);
+            }
+        }
+        return;
+
+    case SourceProp::SuperStereoWidth:
+        CheckSize(1);
+        values[0] = gsl::narrow_cast<T>(Source->mEnhWidth);
+        return;
+
+    case SourceProp::ByteLength:
+    case SourceProp::SampleLength:
+    case SourceProp::SecLength:
+        CheckSize(1);
+        values[0] = GetSourceLength<T>(Source, prop);
+        return;
+
+    case SourceProp::PanningEnabledSOFT:
+        CheckSize(1);
+        values[0] = Source->mPanningEnabled;
+        return;
+
+    case SourceProp::PanSOFT:
+        CheckSize(1);
+        values[0] = gsl::narrow_cast<T>(Source->mPan);
+        return;
+
+    case SourceProp::StereoAngles:
+        if constexpr(std::is_floating_point_v<T>)
+        {
+            CheckSize(2);
+            std::ranges::copy(Source->mStereoPan, values.begin());
+            return;
+        }
+        break;
+
+    case SourceProp::SampleOffsetLatencySOFT:
+        if constexpr(std::is_same_v<T, ALint64SOFT>)
+        {
+            CheckSize(2);
+            /* Get the source offset with the clock time first. Then get the
+             * clock time with the device latency. Order is important.
+             */
+            auto srcclock = nanoseconds{};
+            values[0] = GetSourceSampleOffset(Source, Context, &srcclock).c_val;
+            const auto clocktime = std::invoke([device]() -> ClockLatency
+            {
+                auto statelock = std::lock_guard{device->StateLock};
+                return GetClockLatency(device, device->Backend.get());
+            });
+            if(srcclock == clocktime.ClockTime)
+                values[1] = nanoseconds{clocktime.Latency}.count();
+            else
+            {
+                /* If the clock time incremented, reduce the latency by that
+                 * much since it's that much closer to the source offset it got
+                 * earlier.
+                 */
+                const auto diff = std::min(clocktime.Latency, clocktime.ClockTime-srcclock);
+                values[1] = nanoseconds{clocktime.Latency - diff}.count();
+            }
+            return;
+        }
+        break;
+
+    case SourceProp::SampleOffsetClockSOFT:
+        if constexpr(std::is_same_v<T, ALint64SOFT>)
+        {
+            CheckSize(2);
+            auto srcclock = nanoseconds{};
+            values[0] = GetSourceSampleOffset(Source, Context, &srcclock).c_val;
+            values[1] = srcclock.count();
+            return;
+        }
+        break;
+
+    case SourceProp::SecOffsetLatencySOFT:
+        if constexpr(std::is_same_v<T, ALdouble>)
+        {
+            CheckSize(2);
+            /* Get the source offset with the clock time first. Then get the
+             * clock time with the device latency. Order is important.
+             */
+            auto srcclock = nanoseconds{};
+            values[0] = GetSourceSecOffset(Source, Context, &srcclock);
+            const auto clocktime = std::invoke([device]() -> ClockLatency
+            {
+                auto statelock = std::lock_guard{device->StateLock};
+                return GetClockLatency(device, device->Backend.get());
+            });
+            if(srcclock == clocktime.ClockTime)
+                values[1] = duration_cast<seconds_d>(clocktime.Latency).count();
+            else
+            {
+                /* If the clock time incremented, reduce the latency by that
+                 * much since it's that much closer to the source offset it got
+                 * earlier.
+                 */
+                const auto diff = std::min(clocktime.Latency, clocktime.ClockTime-srcclock);
+                values[1] = duration_cast<seconds_d>(clocktime.Latency - diff).count();
+            }
+            return;
+        }
+        break;
+
+    case SourceProp::SecOffsetClockSOFT:
+        if constexpr(std::is_same_v<T, ALdouble>)
+        {
+            CheckSize(2);
+            auto srcclock = nanoseconds{};
+            values[0] = GetSourceSecOffset(Source, Context, &srcclock);
+            values[1] = duration_cast<seconds_d>(srcclock).count();
+            return;
+        }
+        break;
+
+    case SourceProp::Position:
+        CheckSize(3);
+        values[0] = gsl::narrow_cast<T>(Source->mPosition[0]);
+        values[1] = gsl::narrow_cast<T>(Source->mPosition[1]);
+        values[2] = gsl::narrow_cast<T>(Source->mPosition[2]);
+        return;
+
+    case SourceProp::Velocity:
+        CheckSize(3);
+        values[0] = gsl::narrow_cast<T>(Source->mVelocity[0]);
+        values[1] = gsl::narrow_cast<T>(Source->mVelocity[1]);
+        values[2] = gsl::narrow_cast<T>(Source->mVelocity[2]);
+        return;
+
+    case SourceProp::Direction:
+        CheckSize(3);
+        values[0] = gsl::narrow_cast<T>(Source->mDirection[0]);
+        values[1] = gsl::narrow_cast<T>(Source->mDirection[1]);
+        values[2] = gsl::narrow_cast<T>(Source->mDirection[2]);
+        return;
+
+    case SourceProp::Orientation:
+        CheckSize(6);
+        values[0] = gsl::narrow_cast<T>(Source->mOrientAt[0]);
+        values[1] = gsl::narrow_cast<T>(Source->mOrientAt[1]);
+        values[2] = gsl::narrow_cast<T>(Source->mOrientAt[2]);
+        values[3] = gsl::narrow_cast<T>(Source->mOrientUp[0]);
+        values[4] = gsl::narrow_cast<T>(Source->mOrientUp[1]);
+        values[5] = gsl::narrow_cast<T>(Source->mOrientUp[2]);
+        return;
+
+
+    case SourceProp::SourceRelative:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            values[0] = Source->mHeadRelative;
+            return;
+        }
+        break;
+
+    case SourceProp::Looping:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            values[0] = Source->mLooping;
+            return;
+        }
+        break;
+
+    case SourceProp::Buffer:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            al::BufferQueueItem const *buflist{};
+            /* HACK: This query should technically only return the buffer set
+             * on a static source. However, some apps had used it to detect
+             * when a streaming source changed buffers, so report the current
+             * buffer's ID when playing.
+             */
+            if(Source->mSourceType == AL_STATIC || Source->mState == AL_INITIAL)
+            {
+                if(!Source->mQueue.empty())
+                    buflist = &Source->mQueue.front();
+            }
+            else if(auto const *const voice = GetSourceVoice(Source, Context))
+            {
+                auto *Current = voice->mCurrentBuffer.load(std::memory_order_relaxed);
+                const auto iter = std::ranges::find(Source->mQueue, Current,
+                    [](al::BufferQueueItem const &arg) { return &arg; });
+                buflist = (iter != Source->mQueue.end()) ? &*iter : nullptr;
+            }
+            auto *buffer = buflist ? buflist->mBuffer.get() : nullptr;
+            values[0] = buffer ? static_cast<T>(buffer->mId) : T{0};
+            return;
+        }
+        break;
+
+    case SourceProp::SourceState:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            values[0] = GetSourceState(Source, GetSourceVoice(Source, Context));
+            return;
+        }
+        break;
+
+    case SourceProp::BuffersQueued:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            values[0] = gsl::narrow_cast<T>(Source->mQueue.size());
+            return;
+        }
+        break;
+
+    case SourceProp::BuffersProcessed:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            auto played = ALint{0};
+            /* Buffers on a looping source are in a perpetual state of PENDING,
+             * so don't report any as PROCESSED.
+             */
+            if(!Source->mLooping && Source->mSourceType == AL_STREAMING
+                && Source->mState != AL_INITIAL)
+            {
+                const auto Current = std::invoke([Source,Context]() -> const VoiceBufferItem*
+                {
+                    if(auto const *const voice = GetSourceVoice(Source, Context))
+                        return voice->mCurrentBuffer.load(std::memory_order_relaxed);
+                    return nullptr;
+                });
+                auto const qiter = std::ranges::find(Source->mQueue, Current,
+                    [](al::BufferQueueItem const &item) { return &item; });
+                played = gsl::narrow_cast<ALint>(std::distance(Source->mQueue.begin(), qiter));
+            }
+            values[0] = played;
+            return;
+        }
+        break;
+
+    case SourceProp::SourceType:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            values[0] = Source->mSourceType;
+            return;
+        }
+        break;
+
+    case SourceProp::DirectFilterGainHFAuto:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            values[0] = Source->mDryGainHFAuto;
+            return;
+        }
+        break;
+
+    case SourceProp::AuxSendFilterGainAuto:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            values[0] = Source->mWetGainAuto;
+            return;
+        }
+        break;
+
+    case SourceProp::AuxSendFilterGainHFAuto:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            values[0] = Source->mWetGainHFAuto;
+            return;
+        }
+        break;
+
+    case SourceProp::DirectChannelsSOFT:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            values[0] = EnumFromDirectMode(Source->DirectChannels);
+            return;
+        }
+        break;
+
+    case SourceProp::DistanceModel:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            values[0] = ALenumFromDistanceModel(Source->mDistanceModel);
+            return;
+        }
+        break;
+
+    case SourceProp::Resampler:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            values[0] = T{al::to_underlying(Source->mResampler)};
+            return;
+        }
+        break;
+
+    case SourceProp::Spatialize:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            values[0] = EnumFromSpatializeMode(Source->mSpatialize);
+            return;
+        }
+        break;
+
+    case SourceProp::StereoMode:
+        if constexpr(std::is_integral_v<T>)
+        {
+            CheckSize(1);
+            values[0] = EnumFromStereoMode(Source->mStereoMode);
+            return;
+        }
+        break;
+
+    case SourceProp::DirectFilter:
+    case SourceProp::AuxSendFilter:
+        break;
+    }
+
+    Context->throw_error(AL_INVALID_ENUM, "Invalid source {} query property {:#04x}",
+        PropTypeName<T>(), as_unsigned(al::to_underlying(prop)));
+}
+
+
+using source_store_single = std::array<gsl::not_null<al::Source*>, 1>;
+using source_store_vector = std::vector<gsl::not_null<al::Source*>>;
+using source_store_variant = std::variant<std::monostate,source_store_single,source_store_vector>;
+
+[[nodiscard]]
+auto get_srchandles(gsl::not_null<al::Context*> const context, source_store_variant &source_store,
+    std::span<ALuint const> const sids) -> std::span<gsl::not_null<al::Source*>>
+{
+    if(sids.size() == 1)
+    {
+        auto source = std::array{LookupSource(context, sids[0])};
+        return source_store.emplace<source_store_single>(source);
+    }
+    auto &sources = source_store.emplace<source_store_vector>();
+    sources.reserve(sids.size());
+    std::ranges::transform(sids, std::back_inserter(sources), [context](ALuint const sid)
+    { return LookupSource(context, sid); });
+    return std::span{sources};
+}
+
+void StartSources(gsl::not_null<al::Context*> const context,
+    std::span<gsl::not_null<al::Source*> const> const srchandles,
+    nanoseconds const start_time=nanoseconds::min())
+{
+    auto const device = al::get_not_null(context->mALDevice);
+    /* If the device is disconnected, and voices stop on disconnect, go right
+     * to stopped.
+     */
+    if(!device->Connected.load(std::memory_order_acquire)) [[unlikely]]
+    {
+        if(context->mStopVoicesOnDisconnect.load(std::memory_order_acquire))
+        {
+            for(const gsl::not_null source : srchandles)
+            {
+                /* TODO: Send state change event? */
+                source->mOffset = 0.0;
+                source->mOffsetType = AL_NONE;
+                source->mState = AL_STOPPED;
+            }
+            return;
+        }
+    }
+
+    /* Count the number of reusable voices. */
+    auto voicelist = context->getVoicesSpan();
+    auto free_voices = 0_uz;
+    std::ignore = std::ranges::find_if(voicelist, [srchandles,&free_voices](const Voice *voice)
+    {
+        free_voices += (voice->mPlayState.load(std::memory_order_acquire) == Voice::Stopped
+            && voice->mSourceID.load(std::memory_order_relaxed) == 0u
+            && voice->mPendingChange.load(std::memory_order_relaxed) == false);
+        return (free_voices == srchandles.size());
+    });
+    if(srchandles.size() != free_voices) [[unlikely]]
+    {
+        const auto inc_amount = srchandles.size() - free_voices;
+        auto &allvoices = *context->mVoices.load(std::memory_order_relaxed);
+        if(inc_amount > allvoices.size() - voicelist.size())
+        {
+            /* Increase the number of voices to handle the request. */
+            context->allocVoices(inc_amount - (allvoices.size() - voicelist.size()));
+        }
+        context->mActiveVoiceCount.fetch_add(inc_amount, std::memory_order_release);
+        voicelist = context->getVoicesSpan();
+    }
+
+    auto voiceiter = voicelist.begin();
+    auto vidx = 0u;
+    auto tail = LPVoiceChange{};
+    auto cur = LPVoiceChange{};
+    std::ranges::for_each(srchandles, [&](gsl::not_null<al::Source*> const source)
+    {
+        /* Check that there is a queue containing at least one valid, non zero
+         * length buffer.
+         */
+        const auto BufferList = std::ranges::find_if(source->mQueue, [](al::BufferQueueItem &entry)
+        { return entry.mSampleLen != 0 || entry.mCallback != nullptr; });
+
+        /* If there's nothing to play, go right to stopped. */
+        if(BufferList == source->mQueue.end()) [[unlikely]]
+        {
+            /* NOTE: A source without any playable buffers should not have a
+             * Voice since it shouldn't be in a playing or paused state. So
+             * there's no need to look up its voice and clear the source.
+             */
+            source->mOffset = 0.0;
+            source->mOffsetType = AL_NONE;
+            source->mState = AL_STOPPED;
+            return;
+        }
+
+        if(!cur)
+            cur = tail = GetVoiceChanger(context);
+        else
+        {
+            cur->mNext.store(GetVoiceChanger(context), std::memory_order_relaxed);
+            cur = cur->mNext.load(std::memory_order_relaxed);
+        }
+
+        auto *voice = GetSourceVoice(source, context);
+        switch(GetSourceState(source, voice))
+        {
+        case AL_PAUSED:
+            /* A source that's paused simply resumes. If there's no voice, it
+             * was lost from a disconnect, so just start over with a new one.
+             */
+            cur->mOldVoice = nullptr;
+            if(!voice) break;
+            cur->mVoice = voice;
+            cur->mSourceID = source->mId;
+            cur->mState = VChangeState::Play;
+            source->mState = AL_PLAYING;
+#if ALSOFT_EAX
+            if(context->hasEax())
+                source->eaxCommit();
+#endif // ALSOFT_EAX
+            return;
+
+        case AL_PLAYING:
+            /* A source that's already playing is restarted from the beginning.
+             * Stop the current voice and start a new one so it properly cross-
+             * fades back to the beginning.
+             */
+            if(voice)
+                voice->mPendingChange.store(true, std::memory_order_relaxed);
+            cur->mOldVoice = voice;
+            voice = nullptr;
+            break;
+
+        default:
+            Expects(voice == nullptr);
+            cur->mOldVoice = nullptr;
+#if ALSOFT_EAX
+            if(context->hasEax())
+                source->eaxCommit();
+#endif // ALSOFT_EAX
+            break;
+        }
+
+        /* Find the next unused voice to play this source with. */
+        for(;voiceiter != voicelist.end();++voiceiter,++vidx)
+        {
+            if(auto *const v = *voiceiter;
+                v->mPlayState.load(std::memory_order_acquire) == Voice::Stopped
+                && v->mSourceID.load(std::memory_order_relaxed) == 0u
+                && v->mPendingChange.load(std::memory_order_relaxed) == false)
+            {
+                voice = v;
+                break;
+            }
+        }
+        Ensures(voice != nullptr);
+
+        voice->mPosition.store(0, std::memory_order_relaxed);
+        voice->mPositionFrac.store(0, std::memory_order_relaxed);
+        voice->mCurrentBuffer.store(&source->mQueue.front(), std::memory_order_relaxed);
+        voice->mStartTime = start_time;
+        voice->mFlags.reset();
+        /* A source that's not playing or paused has any offset applied when it
+         * starts playing.
+         */
+        if(const auto offsettype = source->mOffsetType)
+        {
+            auto const offset = f64{source->mOffset};
+            source->mOffsetType = AL_NONE;
+            source->mOffset = 0.0;
+            if(auto const vpos = GetSampleOffset(source->mQueue, SourceProp{offsettype}, offset))
+            {
+                voice->mPosition.store(vpos->pos.c_val, std::memory_order_relaxed);
+                voice->mPositionFrac.store(vpos->frac.c_val, std::memory_order_relaxed);
+                voice->mCurrentBuffer.store(vpos->bufferitem, std::memory_order_relaxed);
+                if(vpos->pos > 0 || (vpos->pos == 0 && vpos->frac > 0)
+                    || vpos->bufferitem != &source->mQueue.front())
+                    voice->mFlags.set(VoiceFlag::IsFading);
+            }
+        }
+        InitVoice(voice, source, &*BufferList, context, device);
+
+        source->mVoiceIdx = vidx;
+        source->mState = AL_PLAYING;
+
+        cur->mVoice = voice;
+        cur->mSourceID = source->mId;
+        cur->mState = VChangeState::Play;
+    });
+    if(tail) [[likely]]
+        SendVoiceChanges(context, tail);
+}
+
+
+void alGenSources_(gsl::not_null<al::Context*> const context, ALsizei const n,
+    ALuint *const sources) noexcept
+try {
+    if(n < 0)
+        context->throw_error(AL_INVALID_VALUE, "Generating {} sources", n);
+    if(n <= 0) [[unlikely]] return;
+
+    auto const srclock = std::unique_lock{context->mSourceLock};
+    auto const device = al::get_not_null(context->mALDevice);
+
+    const auto sids = std::views::counted(sources, n);
+    if(context->mNumSources > device->SourcesMax
+        || sids.size() > device->SourcesMax-context->mNumSources)
+        context->throw_error(AL_OUT_OF_MEMORY, "Exceeding {} source limit ({} + {})",
+            device->SourcesMax, context->mNumSources, n);
+    if(!EnsureSources(context, sids.size()))
+        context->throw_error(AL_OUT_OF_MEMORY, "Failed to allocate {} source{}", n,
+            (n==1) ? "" : "s");
+
+    std::ranges::generate(sids, [context]{ return AllocSource(context)->mId; });
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+void alDeleteSources_(gsl::not_null<al::Context*> context, ALsizei n, const ALuint *sources)
+    noexcept
+try {
+    if(n < 0)
+        context->throw_error(AL_INVALID_VALUE, "Deleting {} sources", n);
+    if(n <= 0) [[unlikely]] return;
+
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    /* Check that all Sources are valid */
+    const auto sids = std::views::counted(sources, n);
+    std::ranges::for_each(sids, [context](const ALuint sid)
+    { std::ignore = LookupSource(context, sid); });
+
+    /* All good. Delete source IDs. */
+    std::ranges::for_each(sids, [context](const ALuint sid) -> void
+    {
+        if(auto *src = LookupSource(std::nothrow, context, sid))
+            FreeSource(context, gsl::make_not_null(src));
+    });
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+auto alIsSource_(gsl::not_null<al::Context*> context, ALuint source) noexcept -> ALboolean
+{
+    auto srclock = std::lock_guard{context->mSourceLock};
+    if(LookupSource(std::nothrow, context, source) != nullptr)
+        return AL_TRUE;
+    return AL_FALSE;
+}
+
+
+void alSourcef_(gsl::not_null<al::Context*> context, ALuint source, ALenum param, ALfloat value)
+    noexcept
+try {
+    auto proplock = std::lock_guard{context->mPropLock};
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    SetProperty<ALfloat>(LookupSource(context, source), context, SourceProp{param}, {&value, 1u});
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+void alSource3f_(gsl::not_null<al::Context*> context, ALuint source, ALenum param, ALfloat value1,
+    ALfloat value2, ALfloat value3) noexcept
+try {
+    auto proplock = std::lock_guard{context->mPropLock};
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    const auto fvals = std::array{value1, value2, value3};
+    SetProperty<ALfloat>(LookupSource(context, source), context, SourceProp{param}, fvals);
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+void alSourcefv_(gsl::not_null<al::Context*> context, ALuint source, ALenum param,
+    const ALfloat *values) noexcept
+try {
+    auto proplock = std::lock_guard{context->mPropLock};
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    auto const Source = LookupSource(context, source);
+    if(!values)
+        context->throw_error(AL_INVALID_VALUE, "NULL pointer");
+
+    const auto count = FloatValsByProp(param);
+    SetProperty(Source, context, SourceProp{param}, std::span{values, count});
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+
+void alSourcedSOFT_(gsl::not_null<al::Context*> context, ALuint source, ALenum param,
+    ALdouble value) noexcept
+try {
+    auto proplock = std::lock_guard{context->mPropLock};
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    SetProperty<ALdouble>(LookupSource(context, source), context, SourceProp{param}, {&value, 1});
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+void alSource3dSOFT_(gsl::not_null<al::Context*> context, ALuint source, ALenum param,
+    ALdouble value1, ALdouble value2, ALdouble value3) noexcept
+try {
+    auto proplock = std::lock_guard{context->mPropLock};
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    const auto dvals = std::array{value1, value2, value3};
+    SetProperty<ALdouble>(LookupSource(context, source), context, SourceProp{param}, dvals);
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+void alSourcedvSOFT_(gsl::not_null<al::Context*> context, ALuint source, ALenum param,
+    const ALdouble *values) noexcept
+try {
+    auto proplock = std::lock_guard{context->mPropLock};
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    auto const Source = LookupSource(context, source);
+    if(!values)
+        context->throw_error(AL_INVALID_VALUE, "NULL pointer");
+
+    const auto count = DoubleValsByProp(param);
+    SetProperty(Source, context, SourceProp{param}, std::span{values, count});
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+
+void alSourcei_(gsl::not_null<al::Context*> context, ALuint source, ALenum param, ALint value)
+    noexcept
+try {
+    auto proplock = std::lock_guard{context->mPropLock};
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    SetProperty<ALint>(LookupSource(context, source), context, SourceProp{param}, {&value, 1u});
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+void alSource3i_(gsl::not_null<al::Context*> context, ALuint source, ALenum param, ALint value1,
+    ALint value2, ALint value3) noexcept
+try {
+    auto proplock = std::lock_guard{context->mPropLock};
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    const auto ivals = std::array{value1, value2, value3};
+    SetProperty<ALint>(LookupSource(context, source), context, SourceProp{param}, ivals);
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+void alSourceiv_(gsl::not_null<al::Context*> context, ALuint source, ALenum param,
+    const ALint *values) noexcept
+try {
+    auto proplock = std::lock_guard{context->mPropLock};
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    auto const Source = LookupSource(context, source);
+    if(!values)
+        context->throw_error(AL_INVALID_VALUE, "NULL pointer");
+
+    const auto count = IntValsByProp(param);
+    SetProperty(Source, context, SourceProp{param}, std::span{values, count});
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+
+void alSourcei64SOFT_(gsl::not_null<al::Context*> context, ALuint source, ALenum param,
+    ALint64SOFT value) noexcept
+try {
+    auto proplock = std::lock_guard{context->mPropLock};
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    SetProperty<ALint64SOFT>(LookupSource(context, source), context, SourceProp{param}, {&value, 1u});
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+void alSource3i64SOFT_(gsl::not_null<al::Context*> context, ALuint source, ALenum param,
+    ALint64SOFT value1, ALint64SOFT value2, ALint64SOFT value3) noexcept
+try {
+    auto proplock = std::lock_guard{context->mPropLock};
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    const auto i64vals = std::array{value1, value2, value3};
+    SetProperty<ALint64SOFT>(LookupSource(context, source), context, SourceProp{param}, i64vals);
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+void alSourcei64vSOFT_(gsl::not_null<al::Context*> context, ALuint source, ALenum param,
+    const ALint64SOFT *values) noexcept
+try {
+    auto proplock = std::lock_guard{context->mPropLock};
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    auto const Source = LookupSource(context, source);
+    if(!values)
+        context->throw_error(AL_INVALID_VALUE, "NULL pointer");
+
+    const auto count = Int64ValsByProp(param);
+    SetProperty(Source, context, SourceProp{param}, std::span{values, count});
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+
+void alGetSourcef_(gsl::not_null<al::Context*> context, ALuint source, ALenum param, ALfloat *value)
+    noexcept
+try {
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    auto const Source = LookupSource(context, source);
+    if(!value)
+        context->throw_error(AL_INVALID_VALUE, "NULL pointer");
+
+    GetProperty(Source, context, SourceProp{param}, std::span{value, 1u});
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+void alGetSource3f_(gsl::not_null<al::Context*> context, ALuint source, ALenum param,
+    ALfloat *value1, ALfloat *value2, ALfloat *value3) noexcept
+try {
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    auto const Source = LookupSource(context, source);
+    if(!(value1 && value2 && value3))
+        context->throw_error(AL_INVALID_VALUE, "NULL pointer");
+
+    auto fvals = std::array<ALfloat, 3>{};
+    GetProperty<ALfloat>(Source, context, SourceProp{param}, fvals);
+    *value1 = fvals[0];
+    *value2 = fvals[1];
+    *value3 = fvals[2];
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+void alGetSourcefv_(gsl::not_null<al::Context*> context, ALuint source, ALenum param,
+    ALfloat *values) noexcept
+try {
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    auto const Source = LookupSource(context, source);
+    if(!values)
+        context->throw_error(AL_INVALID_VALUE, "NULL pointer");
+
+    const auto count = FloatValsByProp(param);
+    GetProperty(Source, context, SourceProp{param}, std::span{values, count});
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+
+void alGetSourcedSOFT_(gsl::not_null<al::Context*> context, ALuint source, ALenum param,
+    ALdouble *value) noexcept
+try {
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    auto const Source = LookupSource(context, source);
+    if(!value)
+        context->throw_error(AL_INVALID_VALUE, "NULL pointer");
+
+    GetProperty(Source, context, SourceProp{param}, std::span{value, 1u});
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+void alGetSource3dSOFT_(gsl::not_null<al::Context*> context, ALuint source, ALenum param,
+    ALdouble *value1, ALdouble *value2, ALdouble *value3) noexcept
+try {
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    auto const Source = LookupSource(context, source);
+    if(!(value1 && value2 && value3))
+        context->throw_error(AL_INVALID_VALUE, "NULL pointer");
+
+    auto dvals = std::array<ALdouble, 3>{};
+    GetProperty<ALdouble>(Source, context, SourceProp{param}, dvals);
+    *value1 = dvals[0];
+    *value2 = dvals[1];
+    *value3 = dvals[2];
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+void alGetSourcedvSOFT_(gsl::not_null<al::Context*> context, ALuint source, ALenum param,
+    ALdouble *values) noexcept
+try {
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    auto const Source = LookupSource(context, source);
+    if(!values)
+        context->throw_error(AL_INVALID_VALUE, "NULL pointer");
+
+    const auto count = DoubleValsByProp(param);
+    GetProperty(Source, context, SourceProp{param}, std::span{values, count});
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+
+void alGetSourcei_(gsl::not_null<al::Context*> context, ALuint source, ALenum param, ALint *value)
+    noexcept
+try {
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    auto const Source = LookupSource(context, source);
+    if(!value)
+        context->throw_error(AL_INVALID_VALUE, "NULL pointer");
+
+    GetProperty(Source, context, SourceProp{param}, std::span{value, 1u});
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+void alGetSource3i_(gsl::not_null<al::Context*> context, ALuint source, ALenum param,
+    ALint *value1, ALint *value2, ALint *value3) noexcept
+try {
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    auto const Source = LookupSource(context, source);
+    if(!(value1 && value2 && value3))
+        context->throw_error(AL_INVALID_VALUE, "NULL pointer");
+
+    auto ivals = std::array<ALint,3>{};
+    GetProperty<ALint>(Source, context, SourceProp{param}, ivals);
+    *value1 = ivals[0];
+    *value2 = ivals[1];
+    *value3 = ivals[2];
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+void alGetSourceiv_(gsl::not_null<al::Context*> context, ALuint source, ALenum param,
+    ALint *values) noexcept
+try {
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    auto const Source = LookupSource(context, source);
+    if(!values)
+        context->throw_error(AL_INVALID_VALUE, "NULL pointer");
+
+    const auto count = IntValsByProp(param);
+    GetProperty(Source, context, SourceProp{param}, std::span{values, count});
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+
+void alGetSourcei64SOFT_(gsl::not_null<al::Context*> context, ALuint source, ALenum param,
+    ALint64SOFT *value) noexcept
+try {
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    auto const Source = LookupSource(context, source);
+    if(!value)
+        context->throw_error(AL_INVALID_VALUE, "NULL pointer");
+
+    GetProperty(Source, context, SourceProp{param}, std::span{value, 1u});
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+void alGetSource3i64SOFT_(gsl::not_null<al::Context*> context, ALuint source, ALenum param,
+    ALint64SOFT *value1, ALint64SOFT *value2, ALint64SOFT *value3) noexcept
+try {
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    auto const Source = LookupSource(context, source);
+    if(!(value1 && value2 && value3))
+        context->throw_error(AL_INVALID_VALUE, "NULL pointer");
+
+    auto i64vals = std::array<ALint64SOFT, 3>{};
+    GetProperty<ALint64SOFT>(Source, context, SourceProp{param}, i64vals);
+    *value1 = i64vals[0];
+    *value2 = i64vals[1];
+    *value3 = i64vals[2];
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+void alGetSourcei64vSOFT_(gsl::not_null<al::Context*> context, ALuint source, ALenum param,
+    ALint64SOFT *values) noexcept
+try {
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    auto const Source = LookupSource(context, source);
+    if(!values)
+        context->throw_error(AL_INVALID_VALUE, "NULL pointer");
+
+    const auto count = Int64ValsByProp(param);
+    GetProperty(Source, context, SourceProp{param}, std::span{values, count});
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+
+void alSourcePlayv_(gsl::not_null<al::Context*> context, ALsizei n, const ALuint *sources) noexcept
+try {
+    if(n < 0)
+        context->throw_error(AL_INVALID_VALUE, "Playing {} sources", n);
+    if(n <= 0) [[unlikely]] return;
+
+    const auto sids = std::views::counted(sources, n);
+    auto source_store = source_store_variant{};
+
+    auto srclock = std::lock_guard{context->mSourceLock};
+    const auto srchandles = get_srchandles(context, source_store, sids);
+
+    StartSources(context, srchandles);
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+void alSourcePlay_(gsl::not_null<al::Context*> context, ALuint source) noexcept
+try {
+    auto srclock = std::lock_guard{context->mSourceLock};
+    auto Source = LookupSource(context, source);
+    StartSources(context, {&Source, 1});
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+void alSourcePlayAtTimevSOFT_(gsl::not_null<al::Context*> context, ALsizei n,
+    ALuint const *sources, ALint64SOFT start_time) noexcept
+try {
+    if(n < 0)
+        context->throw_error(AL_INVALID_VALUE, "Playing {} sources", n);
+    if(n <= 0) [[unlikely]] return;
+
+    if(start_time < 0)
+        context->throw_error(AL_INVALID_VALUE, "Invalid time point {}", start_time);
+
+    const auto sids = std::views::counted(sources, n);
+    auto source_store = source_store_variant{};
+
+    auto srclock = std::lock_guard{context->mSourceLock};
+    const auto srchandles = get_srchandles(context, source_store, sids);
+
+    StartSources(context, srchandles, nanoseconds{start_time});
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+void alSourcePlayAtTimeSOFT_(gsl::not_null<al::Context*> context, ALuint source,
+    ALint64SOFT start_time) noexcept
+try {
+    if(start_time < 0)
+        context->throw_error(AL_INVALID_VALUE, "Invalid time point {}", start_time);
+
+    auto srclock = std::lock_guard{context->mSourceLock};
+    auto Source = LookupSource(context, source);
+    StartSources(context, {&Source, 1}, nanoseconds{start_time});
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+
+void alSourcePausev_(gsl::not_null<al::Context*> context, ALsizei n, const ALuint *sources)
+    noexcept
+try {
+    if(n < 0)
+        context->throw_error(AL_INVALID_VALUE, "Pausing {} sources", n);
+    if(n <= 0) [[unlikely]] return;
+
+    const auto sids = std::views::counted(sources, n);
+    auto source_store = source_store_variant{};
+
+    auto srclock = std::lock_guard{context->mSourceLock};
+    const auto srchandles = get_srchandles(context, source_store, sids);
+
+    /* Pausing has to be done in two steps. First, for each source that's
+     * detected to be playing, change the voice (asynchronously) to
+     * stopping/paused.
+     */
+    auto tail = LPVoiceChange{};
+    auto cur = LPVoiceChange{};
+    std::ranges::for_each(srchandles, [context,&tail,&cur](gsl::not_null<al::Source*> const source)
+    {
+        if(auto *const voice = GetSourceVoice(source, context);
+            GetSourceState(source, voice) == AL_PLAYING)
+        {
+            if(!cur)
+                cur = tail = GetVoiceChanger(context);
+            else
+            {
+                cur->mNext.store(GetVoiceChanger(context), std::memory_order_relaxed);
+                cur = cur->mNext.load(std::memory_order_relaxed);
+            }
+            cur->mVoice = voice;
+            cur->mSourceID = source->mId;
+            cur->mState = VChangeState::Pause;
+        }
+    });
+    if(tail) [[likely]]
+    {
+        SendVoiceChanges(context, tail);
+        /* Second, now that the voice changes have been sent, because it's
+         * possible that the voice stopped after it was detected playing and
+         * before the voice got paused, recheck that the source is still
+         * considered playing and set it to paused if so.
+         */
+        std::ranges::for_each(srchandles, [context](gsl::not_null<al::Source*> const source)
+        {
+            if(auto const *const voice = GetSourceVoice(source, context);
+                GetSourceState(source, voice) == AL_PLAYING)
+                source->mState = AL_PAUSED;
+        });
+    }
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+void alSourcePause_(gsl::not_null<al::Context*> const context, ALuint const source) noexcept
+{ alSourcePausev_(context, 1, &source); }
+
+
+void alSourceStopv_(gsl::not_null<al::Context*> context, ALsizei n, const ALuint *sources) noexcept
+try {
+    if(n < 0)
+        context->throw_error(AL_INVALID_VALUE, "Stopping {} sources", n);
+    if(n <= 0) [[unlikely]] return;
+
+    const auto sids = std::views::counted(sources, n);
+    auto source_store = source_store_variant{};
+
+    auto srclock = std::lock_guard{context->mSourceLock};
+    const auto srchandles = get_srchandles(context, source_store, sids);
+
+    auto tail = LPVoiceChange{};
+    auto cur = LPVoiceChange{};
+    std::ranges::for_each(srchandles, [context,&tail,&cur](gsl::not_null<al::Source*> const source)
+    {
+        if(auto *const voice = GetSourceVoice(source, context))
+        {
+            if(!cur)
+                cur = tail = GetVoiceChanger(context);
+            else
+            {
+                cur->mNext.store(GetVoiceChanger(context), std::memory_order_relaxed);
+                cur = cur->mNext.load(std::memory_order_relaxed);
+            }
+            voice->mPendingChange.store(true, std::memory_order_relaxed);
+            cur->mVoice = voice;
+            cur->mSourceID = source->mId;
+            cur->mState = VChangeState::Stop;
+            source->mState = AL_STOPPED;
+        }
+        source->mOffset = 0.0;
+        source->mOffsetType = AL_NONE;
+        source->mVoiceIdx = InvalidVoiceIndex;
+    });
+    if(tail) [[likely]]
+        SendVoiceChanges(context, tail);
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+void alSourceStop_(gsl::not_null<al::Context*> context, ALuint source) noexcept
+{ alSourceStopv_(context, 1, &source); }
+
+
+void alSourceRewindv_(gsl::not_null<al::Context*> context, ALsizei n, const ALuint *sources)
+    noexcept
+try {
+    if(n < 0)
+        context->throw_error(AL_INVALID_VALUE, "Rewinding {} sources", n);
+    if(n <= 0) [[unlikely]] return;
+
+    const auto sids = std::views::counted(sources, n);
+    auto source_store = source_store_variant{};
+
+    auto srclock = std::lock_guard{context->mSourceLock};
+    const auto srchandles = get_srchandles(context, source_store, sids);
+
+    auto tail = LPVoiceChange{};
+    auto cur = LPVoiceChange{};
+    std::ranges::for_each(srchandles, [context,&tail,&cur](gsl::not_null<al::Source*> const source)
+    {
+        auto *const voice = GetSourceVoice(source, context);
+        if(source->mState != AL_INITIAL)
+        {
+            if(!cur)
+                cur = tail = GetVoiceChanger(context);
+            else
+            {
+                cur->mNext.store(GetVoiceChanger(context), std::memory_order_relaxed);
+                cur = cur->mNext.load(std::memory_order_relaxed);
+            }
+            if(voice)
+                voice->mPendingChange.store(true, std::memory_order_relaxed);
+            cur->mVoice = voice;
+            cur->mSourceID = source->mId;
+            cur->mState = VChangeState::Reset;
+            source->mState = AL_INITIAL;
+        }
+        source->mOffset = 0.0;
+        source->mOffsetType = AL_NONE;
+        source->mVoiceIdx = InvalidVoiceIndex;
+    });
+    if(tail) [[likely]]
+        SendVoiceChanges(context, tail);
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+void alSourceRewind_(gsl::not_null<al::Context*> context, ALuint source) noexcept
+{ alSourceRewindv_(context, 1, &source); }
+
+
+void alSourceQueueBuffers_(gsl::not_null<al::Context*> context, ALuint src, ALsizei nb,
+    const ALuint *buffers) noexcept
+try {
+    if(nb < 0)
+        context->throw_error(AL_INVALID_VALUE, "Queueing {} buffers", nb);
+    if(nb <= 0) [[unlikely]] return;
+
+    auto srclock = std::lock_guard{context->mSourceLock};
+    auto const source = LookupSource(context, src);
+
+    /* Can't queue on a Static Source */
+    if(source->mSourceType == AL_STATIC)
+        context->throw_error(AL_INVALID_OPERATION, "Queueing onto static source {}", src);
+
+    /* Check for a valid Buffer, for its frequency and format */
+    auto const device = al::get_not_null(context->mALDevice);
+    auto BufferFmt = std::invoke([source]() -> al::Buffer*
+    {
+        const auto iter = std::ranges::find_if(source->mQueue, HasBuffer);
+        if(iter != source->mQueue.end())
+            return iter->mBuffer.get();
+        return nullptr;
+    });
+
+    auto buflock = std::unique_lock{device->BufferLock};
+    const auto bids = std::views::counted(buffers, nb);
+    const auto NewListStart = std::ssize(source->mQueue);
+    try {
+        al::BufferQueueItem *BufferList{};
+        std::ranges::for_each(bids,[context,source,&BufferFmt,&BufferList](const ALuint bid)
+        {
+            auto *buffer = bid ? LookupBuffer(context, bid).get() : nullptr;
+            if(buffer)
+            {
+                if(buffer->mSampleRate < 1)
+                    context->throw_error(AL_INVALID_OPERATION,
+                        "Queueing buffer {} with no format", buffer->mId);
+
+                if(buffer->mCallback)
+                    context->throw_error(AL_INVALID_OPERATION, "Queueing callback buffer {}",
+                        buffer->mId);
+
+                if(buffer->mMappedAccess != 0 && !(buffer->mMappedAccess&AL_MAP_PERSISTENT_BIT_SOFT))
+                    context->throw_error(AL_INVALID_OPERATION,
+                        "Queueing non-persistently mapped buffer {}", buffer->mId);
+            }
+
+            source->mQueue.emplace_back();
+            if(!BufferList)
+                BufferList = &source->mQueue.back();
+            else
+            {
+                auto &item = source->mQueue.back();
+                BufferList->mNext.store(&item, std::memory_order_relaxed);
+                BufferList = &item;
+            }
+            if(!buffer) return;
+            BufferList->mBuffer = buffer->newReference();
+            BufferList->mBlockAlign = buffer->mBlockAlign;
+            BufferList->mSampleLen = buffer->mSampleLen;
+            BufferList->mLoopEnd = buffer->mSampleLen;
+            BufferList->mSamples = buffer->mData;
+
+            if(BufferFmt == nullptr)
+                BufferFmt = buffer;
+            else
+            {
+                auto fmt_mismatch = false;
+                fmt_mismatch |= BufferFmt->mSampleRate != buffer->mSampleRate;
+                fmt_mismatch |= BufferFmt->mChannels != buffer->mChannels;
+                fmt_mismatch |= BufferFmt->mType != buffer->mType;
+                if(BufferFmt->isBFormat())
+                {
+                    fmt_mismatch |= BufferFmt->mAmbiLayout != buffer->mAmbiLayout;
+                    fmt_mismatch |= BufferFmt->mAmbiScaling != buffer->mAmbiScaling;
+                }
+                fmt_mismatch |= BufferFmt->mAmbiOrder != buffer->mAmbiOrder;
+                if(fmt_mismatch)
+                    context->throw_error(AL_INVALID_OPERATION,
+                        "Queueing buffer with mismatched format\n"
+                        "  Expected: {}hz, {}, {} ; Got: {}hz, {}, {}\n", BufferFmt->mSampleRate,
+                        NameFromFormat(BufferFmt->mType), NameFromFormat(BufferFmt->mChannels),
+                        buffer->mSampleRate, NameFromFormat(buffer->mType),
+                        NameFromFormat(buffer->mChannels));
+            }
+        });
+    }
+    catch(...) {
+        /* A buffer failed (invalid ID or format), or there was some other
+         * unexpected error, so release the buffers we had.
+         */
+        source->mQueue.resize(gsl::narrow_cast<std::size_t>(NewListStart));
+        throw;
+    }
+    /* All buffers good. */
+    buflock.unlock();
+
+    /* Source is now streaming */
+    source->mSourceType = AL_STREAMING;
+
+    if(NewListStart > 0)
+    {
+        auto iter = std::next(source->mQueue.begin(), NewListStart);
+        (iter-1)->mNext.store(&*iter, std::memory_order_release);
+    }
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+void alSourceUnqueueBuffers_(gsl::not_null<al::Context*> context, ALuint src, ALsizei nb,
+    ALuint *buffers) noexcept
+try {
+    if(nb < 0)
+        context->throw_error(AL_INVALID_VALUE, "Unqueueing {} buffers", nb);
+    if(nb <= 0) [[unlikely]] return;
+
+    auto srclock = std::lock_guard{context->mSourceLock};
+
+    auto const source = LookupSource(context, src);
+    if(source->mSourceType != AL_STREAMING)
+        context->throw_error(AL_INVALID_VALUE, "Unqueueing from a non-streaming source {}", src);
+    if(source->mLooping)
+        context->throw_error(AL_INVALID_VALUE, "Unqueueing from looping source {}", src);
+
+    /* Make sure enough buffers have been processed to unqueue. */
+    const auto bids = std::views::counted(buffers, nb);
+    auto processed = 0_usize;
+    if(source->mState != AL_INITIAL) [[likely]]
+    {
+        const auto Current = std::invoke([source,context]() -> const VoiceBufferItem*
+        {
+            if(auto *voice = GetSourceVoice(source, context))
+                return voice->mCurrentBuffer.load(std::memory_order_relaxed);
+            return nullptr;
+        });
+        const auto qiter = std::ranges::find(source->mQueue, Current,
+            [](al::BufferQueueItem const &item) { return &item; });
+        processed = isize{std::distance(source->mQueue.begin(), qiter)}.reinterpret_as<usize>();
+    }
+    if(processed < bids.size())
+        context->throw_error(AL_INVALID_VALUE, "Unqueueing {} buffer{} (only {} processed)",
+            nb, (nb==1) ? "" : "s", processed);
+
+    std::ranges::generate(bids, [source]() noexcept -> ALuint
+    {
+        auto bid = 0u;
+        if(auto const *const buffer = source->mQueue.front().mBuffer.get())
+            bid = buffer->mId;
+        source->mQueue.pop_front();
+        return bid;
+    });
+}
+catch(al::base_exception&) {
+}
+catch(std::exception &e) {
+    ERR("Caught exception: {}", e.what());
+}
+
+} // namespace
+
+DECL_FUNC(AL_API, void, alGenSources, ALsizei,n, ALuint*,sources)
+DECL_FUNC(AL_API, void, alDeleteSources, ALsizei,n, const ALuint*,sources)
+DECL_FUNC(AL_API, ALboolean, alIsSource, ALuint,source)
+
+DECL_FUNC(AL_API, void, alSourcef, ALuint,source, ALenum,param, ALfloat,value)
+DECL_FUNC(AL_API, void, alSource3f, ALuint,source, ALenum,param, ALfloat,value1, ALfloat,value2, ALfloat,value3)
+DECL_FUNC(AL_API, void, alSourcefv, ALuint,source, ALenum,param, const ALfloat*,values)
+
+DECL_FUNCEXT(AL_API, void, alSourced,SOFT, ALuint,source, ALenum,param, ALdouble,value)
+DECL_FUNCEXT(AL_API, void, alSource3d,SOFT, ALuint,source, ALenum,param, ALdouble,value1, ALdouble,value2, ALdouble,value3)
+DECL_FUNCEXT(AL_API, void, alSourcedv,SOFT, ALuint,source, ALenum,param, const ALdouble*,values)
+
+DECL_FUNC(AL_API, void, alSourcei, ALuint,source, ALenum,param, ALint,value)
+DECL_FUNC(AL_API, void, alSource3i, ALuint,buffer, ALenum,param, ALint,value1, ALint,value2, ALint,value3)
+DECL_FUNC(AL_API, void, alSourceiv, ALuint,source, ALenum,param, const ALint*,values)
+
+DECL_FUNCEXT(AL_API, void, alSourcei64,SOFT, ALuint,source, ALenum,param, ALint64SOFT,value)
+DECL_FUNCEXT(AL_API, void, alSource3i64,SOFT, ALuint,source, ALenum,param, ALint64SOFT,value1, ALint64SOFT,value2, ALint64SOFT,value3)
+DECL_FUNCEXT(AL_API, void, alSourcei64v,SOFT, ALuint,source, ALenum,param, const ALint64SOFT*,values)
+
+DECL_FUNC(AL_API, void, alGetSourcef, ALuint,source, ALenum,param, ALfloat*,value)
+DECL_FUNC(AL_API, void, alGetSource3f, ALuint,source, ALenum,param, ALfloat*,value1, ALfloat*,value2, ALfloat*,value3)
+DECL_FUNC(AL_API, void, alGetSourcefv, ALuint,source, ALenum,param, ALfloat*,values)
+
+DECL_FUNCEXT(AL_API, void, alGetSourced,SOFT, ALuint,source, ALenum,param, ALdouble*,value)
+DECL_FUNCEXT(AL_API, void, alGetSource3d,SOFT, ALuint,source, ALenum,param, ALdouble*,value1, ALdouble*,value2, ALdouble*,value3)
+DECL_FUNCEXT(AL_API, void, alGetSourcedv,SOFT, ALuint,source, ALenum,param, ALdouble*,values)
+
+DECL_FUNC(AL_API, void, alGetSourcei, ALuint,source, ALenum,param, ALint*,value)
+DECL_FUNC(AL_API, void, alGetSource3i, ALuint,source, ALenum,param, ALint*,value1, ALint*,value2, ALint*,value3)
+DECL_FUNC(AL_API, void, alGetSourceiv, ALuint,source, ALenum,param, ALint*,values)
+
+DECL_FUNCEXT(AL_API, void, alGetSourcei64,SOFT, ALuint,source, ALenum,param, ALint64SOFT*,value)
+DECL_FUNCEXT(AL_API, void, alGetSource3i64,SOFT, ALuint,source, ALenum,param, ALint64SOFT*,value1, ALint64SOFT*,value2, ALint64SOFT*,value3)
+DECL_FUNCEXT(AL_API, void, alGetSourcei64v,SOFT, ALuint,source, ALenum,param, ALint64SOFT*,values)
+
+DECL_FUNC(AL_API, void, alSourcePlay, ALuint,source)
+DECL_FUNCEXT(FORCE_ALIGN, void, alSourcePlayAtTime,SOFT, ALuint,source, ALint64SOFT,start_time)
+DECL_FUNC(AL_API, void, alSourcePlayv, ALsizei,n, const ALuint*,sources)
+DECL_FUNCEXT(FORCE_ALIGN, void, alSourcePlayAtTimev,SOFT, ALsizei,n, const ALuint*,sources, ALint64SOFT,start_time)
+
+DECL_FUNC(AL_API, void, alSourcePause, ALuint,source)
+DECL_FUNC(AL_API, void, alSourcePausev, ALsizei,n, const ALuint*,sources)
+
+DECL_FUNC(AL_API, void, alSourceStop, ALuint,source)
+DECL_FUNC(AL_API, void, alSourceStopv, ALsizei,n, const ALuint*,sources)
+
+DECL_FUNC(AL_API, void, alSourceRewind, ALuint,source)
+DECL_FUNC(AL_API, void, alSourceRewindv, ALsizei,n, const ALuint*,sources)
+
+DECL_FUNC(AL_API, void, alSourceQueueBuffers, ALuint,source, ALsizei,nb, const ALuint*,buffers)
+DECL_FUNC(AL_API, void, alSourceUnqueueBuffers, ALuint,source, ALsizei,nb, ALuint*,buffers)
+
+
+AL_API void AL_APIENTRY alSourceQueueBufferLayersSOFT(ALuint, ALsizei, const ALuint*) noexcept
+{
+    const auto context = GetContextRef();
+    if(!context) [[unlikely]] return;
+
+    context->setError(AL_INVALID_OPERATION, "alSourceQueueBufferLayersSOFT not supported");
+}
+
+
+al::Source::Source() noexcept
+{
+    mDirect.mGain = 1.0f;
+    mDirect.mGainHF = 1.0f;
+    mDirect.mHFReference = LowPassFreqRef;
+    mDirect.mGainLF = 1.0f;
+    mDirect.mLFReference = HighPassFreqRef;
+    mSend.fill(SendData{.mSlot={}, .mGain=1.0f,
+        .mGainHF=1.0f, .mHFReference=LowPassFreqRef,
+        .mGainLF=1.0f, .mLFReference=HighPassFreqRef});
+}
+
+al::Source::~Source() = default;
+
+
+void UpdateAllSourceProps(gsl::not_null<al::Context*> const context)
+{
+    auto const srclock = std::lock_guard{context->mSourceLock};
+    auto const voicelist = context->getVoicesSpan();
+    auto vidx = 0u;
+    for(Voice *voice : voicelist)
+    {
+        auto const sid = voice->mSourceID.load(std::memory_order_acquire);
+        if(auto *const source = sid ? LookupSource(std::nothrow, context, sid) : nullptr;
+            source && source->mVoiceIdx == vidx)
+        {
+            if(std::exchange(source->mPropsDirty, false))
+                UpdateSourceProps(gsl::make_not_null(source), voice, context);
+        }
+        ++vidx;
+    }
+}
+
+void al::Source::SetName(gsl::not_null<al::Context*> const context, ALuint const id,
+    std::string_view const name)
+{
+    auto const srclock = std::lock_guard{context->mSourceLock};
+
+    std::ignore = LookupSource(context, id);
+    context->mSourceNames.insert_or_assign(id, name);
+}
+
+
+SourceSubList::~SourceSubList()
+{
+    if(!mSources)
+        return;
+
+    auto usemask = ~mFreeMask;
+    while(usemask != 0)
+    {
+        const auto idx = usemask.countr_zero();
+        usemask &= ~(1_u64 << idx);
+        std::destroy_at(std::to_address(mSources->begin() + as_signed(idx.c_val)));
+    }
+    mFreeMask = ~usemask;
+    SubListAllocator{}.deallocate(mSources, 1);
+    mSources = nullptr;
+}
+
+
+#if ALSOFT_EAX
+void al::Source::eaxInitialize(gsl::not_null<Context*> const context) noexcept
+{
+    mEaxAlContext = context;
+
+    mEaxPrimaryFxSlotId = context->eaxGetPrimaryFxSlotIndex();
+    eax_set_defaults();
+
+    eax1_translate(mEax1.i, mEax);
+    mEaxVersion = 1;
+    mEaxChanged = true;
+}
+
+auto al::Source::EaxLookupSource(gsl::not_null<al::Context*> const al_context,
+    ALuint const source_id) noexcept -> Source*
+{
+    return LookupSource(std::nothrow, al_context, source_id);
+}
+
+[[noreturn]]
+void al::Source::eax_fail(const std::string_view message) { throw Exception{message}; }
+
+[[noreturn]]
+void al::Source::eax_fail_unknown_property_id() { eax_fail("Unknown property id."); }
+
+[[noreturn]]
+void al::Source::eax_fail_unknown_version() { eax_fail("Unknown version."); }
+
+[[noreturn]]
+void al::Source::eax_fail_unknown_active_fx_slot_id() { eax_fail("Unknown active FX slot ID."); }
+
+[[noreturn]]
+void al::Source::eax_fail_unknown_receiving_fx_slot_id() {eax_fail("Unknown receiving FX slot ID.");}
+
+void al::Source::eax_set_sends_defaults(EaxSends& sends, const EaxFxSlotIds& ids) noexcept
+{
+    for(auto const i : std::views::iota(0_uz, std::size_t{EAX_MAX_FXSLOTS}))
+    {
+        auto& send = sends[i];
+        send.guidReceivingFXSlotID = *(ids[i]);
+        send.mSend.lSend = EAXSOURCE_DEFAULTSEND;
+        send.mSend.lSendHF = EAXSOURCE_DEFAULTSENDHF;
+        send.mOcclusion.lOcclusion = EAXSOURCE_DEFAULTOCCLUSION;
+        send.mOcclusion.flOcclusionLFRatio = EAXSOURCE_DEFAULTOCCLUSIONLFRATIO;
+        send.mOcclusion.flOcclusionRoomRatio = EAXSOURCE_DEFAULTOCCLUSIONROOMRATIO;
+        send.mOcclusion.flOcclusionDirectRatio = EAXSOURCE_DEFAULTOCCLUSIONDIRECTRATIO;
+        send.mExclusion.lExclusion = EAXSOURCE_DEFAULTEXCLUSION;
+        send.mExclusion.flExclusionLFRatio = EAXSOURCE_DEFAULTEXCLUSIONLFRATIO;
+    }
+}
+
+void al::Source::eax1_set_defaults(EAXBUFFER_REVERBPROPERTIES& props) noexcept
+{
+    props.fMix = EAX_REVERBMIX_USEDISTANCE;
+}
+
+void al::Source::eax1_set_defaults() noexcept
+{
+    eax1_set_defaults(mEax1.i);
+    mEax1.d = mEax1.i;
+}
+
+void al::Source::eax2_set_defaults(EAX20BUFFERPROPERTIES& props) noexcept
+{
+    props.lDirect = EAXSOURCE_DEFAULTDIRECT;
+    props.lDirectHF = EAXSOURCE_DEFAULTDIRECTHF;
+    props.lRoom = EAXSOURCE_DEFAULTROOM;
+    props.lRoomHF = EAXSOURCE_DEFAULTROOMHF;
+    props.flRoomRolloffFactor = EAXSOURCE_DEFAULTROOMROLLOFFFACTOR;
+    props.lObstruction = EAXSOURCE_DEFAULTOBSTRUCTION;
+    props.flObstructionLFRatio = EAXSOURCE_DEFAULTOBSTRUCTIONLFRATIO;
+    props.lOcclusion = EAXSOURCE_DEFAULTOCCLUSION;
+    props.flOcclusionLFRatio = EAXSOURCE_DEFAULTOCCLUSIONLFRATIO;
+    props.flOcclusionRoomRatio = EAXSOURCE_DEFAULTOCCLUSIONROOMRATIO;
+    props.lOutsideVolumeHF = EAXSOURCE_DEFAULTOUTSIDEVOLUMEHF;
+    props.flAirAbsorptionFactor = EAXSOURCE_DEFAULTAIRABSORPTIONFACTOR;
+    props.dwFlags = EAXSOURCE_DEFAULTFLAGS;
+}
+
+void al::Source::eax2_set_defaults() noexcept
+{
+    eax2_set_defaults(mEax2.i);
+    mEax2.d = mEax2.i;
+}
+
+void al::Source::eax3_set_defaults(EAX30SOURCEPROPERTIES& props) noexcept
+{
+    props.lDirect = EAXSOURCE_DEFAULTDIRECT;
+    props.lDirectHF = EAXSOURCE_DEFAULTDIRECTHF;
+    props.lRoom = EAXSOURCE_DEFAULTROOM;
+    props.lRoomHF = EAXSOURCE_DEFAULTROOMHF;
+    props.mObstruction.lObstruction = EAXSOURCE_DEFAULTOBSTRUCTION;
+    props.mObstruction.flObstructionLFRatio = EAXSOURCE_DEFAULTOBSTRUCTIONLFRATIO;
+    props.mOcclusion.lOcclusion = EAXSOURCE_DEFAULTOCCLUSION;
+    props.mOcclusion.flOcclusionLFRatio = EAXSOURCE_DEFAULTOCCLUSIONLFRATIO;
+    props.mOcclusion.flOcclusionRoomRatio = EAXSOURCE_DEFAULTOCCLUSIONROOMRATIO;
+    props.mOcclusion.flOcclusionDirectRatio = EAXSOURCE_DEFAULTOCCLUSIONDIRECTRATIO;
+    props.mExclusion.lExclusion = EAXSOURCE_DEFAULTEXCLUSION;
+    props.mExclusion.flExclusionLFRatio = EAXSOURCE_DEFAULTEXCLUSIONLFRATIO;
+    props.lOutsideVolumeHF = EAXSOURCE_DEFAULTOUTSIDEVOLUMEHF;
+    props.flDopplerFactor = EAXSOURCE_DEFAULTDOPPLERFACTOR;
+    props.flRolloffFactor = EAXSOURCE_DEFAULTROLLOFFFACTOR;
+    props.flRoomRolloffFactor = EAXSOURCE_DEFAULTROOMROLLOFFFACTOR;
+    props.flAirAbsorptionFactor = EAXSOURCE_DEFAULTAIRABSORPTIONFACTOR;
+    props.ulFlags = EAXSOURCE_DEFAULTFLAGS;
+}
+
+void al::Source::eax3_set_defaults() noexcept
+{
+    eax3_set_defaults(mEax3.i);
+    mEax3.d = mEax3.i;
+}
+
+void al::Source::eax4_set_sends_defaults(EaxSends& sends) noexcept
+{
+    eax_set_sends_defaults(sends, eax4_fx_slot_ids);
+}
+
+void al::Source::eax4_set_active_fx_slots_defaults(EAX40ACTIVEFXSLOTS& slots) noexcept
+{
+    slots = EAX40SOURCE_DEFAULTACTIVEFXSLOTID;
+}
+
+void al::Source::eax4_set_defaults() noexcept
+{
+    eax3_set_defaults(mEax4.i.source);
+    eax4_set_sends_defaults(mEax4.i.sends);
+    eax4_set_active_fx_slots_defaults(mEax4.i.active_fx_slots);
+    mEax4.d = mEax4.i;
+}
+
+void al::Source::eax5_set_source_defaults(EAX50SOURCEPROPERTIES& props) noexcept
+{
+    eax3_set_defaults(props);
+    props.flMacroFXFactor = EAXSOURCE_DEFAULTMACROFXFACTOR;
+}
+
+void al::Source::eax5_set_sends_defaults(EaxSends& sends) noexcept
+{
+    eax_set_sends_defaults(sends, eax5_fx_slot_ids);
+}
+
+void al::Source::eax5_set_active_fx_slots_defaults(EAX50ACTIVEFXSLOTS& slots) noexcept
+{
+    slots = EAX50SOURCE_3DDEFAULTACTIVEFXSLOTID;
+}
+
+void al::Source::eax5_set_speaker_levels_defaults(EaxSpeakerLevels& speaker_levels) noexcept
+{
+    for(auto const i : std::views::iota(0_uz, std::size_t{eax_max_speakers}))
+    {
+        auto& speaker_level = speaker_levels[i];
+        speaker_level.lSpeakerID = gsl::narrow_cast<eax_long>(EAXSPEAKER_FRONT_LEFT + i);
+        speaker_level.lLevel = EAXSOURCE_DEFAULTSPEAKERLEVEL;
+    }
+}
+
+void al::Source::eax5_set_defaults(Eax5Props& props) noexcept
+{
+    eax5_set_source_defaults(props.source);
+    eax5_set_sends_defaults(props.sends);
+    eax5_set_active_fx_slots_defaults(props.active_fx_slots);
+    eax5_set_speaker_levels_defaults(props.speaker_levels);
+}
+
+void al::Source::eax5_set_defaults() noexcept
+{
+    eax5_set_defaults(mEax5.i);
+    mEax5.d = mEax5.i;
+}
+
+void al::Source::eax_set_defaults() noexcept
+{
+    eax1_set_defaults();
+    eax2_set_defaults();
+    eax3_set_defaults();
+    eax4_set_defaults();
+    eax5_set_defaults();
+}
+
+void al::Source::eax1_translate(const EAXBUFFER_REVERBPROPERTIES& src, Eax5Props& dst) noexcept
+{
+    eax5_set_defaults(dst);
+
+    if (src.fMix == EAX_REVERBMIX_USEDISTANCE)
+    {
+        dst.source.ulFlags |= EAXSOURCEFLAGS_ROOMAUTO;
+        dst.sends[0].mSend.lSend = 0;
+    }
+    else
+    {
+        dst.source.ulFlags &= ~EAXSOURCEFLAGS_ROOMAUTO;
+        dst.sends[0].mSend.lSend = std::clamp(
+            gsl::narrow_cast<eax_long>(gain_to_level_mb(src.fMix)), EAXSOURCE_MINSEND,
+            EAXSOURCE_MAXSEND);
+    }
+}
+
+void al::Source::eax2_translate(const EAX20BUFFERPROPERTIES& src, Eax5Props& dst) noexcept
+{
+    // Source.
+    //
+    dst.source.lDirect = src.lDirect;
+    dst.source.lDirectHF = src.lDirectHF;
+    dst.source.lRoom = src.lRoom;
+    dst.source.lRoomHF = src.lRoomHF;
+    dst.source.mObstruction.lObstruction = src.lObstruction;
+    dst.source.mObstruction.flObstructionLFRatio = src.flObstructionLFRatio;
+    dst.source.mOcclusion.lOcclusion = src.lOcclusion;
+    dst.source.mOcclusion.flOcclusionLFRatio = src.flOcclusionLFRatio;
+    dst.source.mOcclusion.flOcclusionRoomRatio = src.flOcclusionRoomRatio;
+    dst.source.mOcclusion.flOcclusionDirectRatio = EAXSOURCE_DEFAULTOCCLUSIONDIRECTRATIO;
+    dst.source.mExclusion.lExclusion = EAXSOURCE_DEFAULTEXCLUSION;
+    dst.source.mExclusion.flExclusionLFRatio = EAXSOURCE_DEFAULTEXCLUSIONLFRATIO;
+    dst.source.lOutsideVolumeHF = src.lOutsideVolumeHF;
+    dst.source.flDopplerFactor = EAXSOURCE_DEFAULTDOPPLERFACTOR;
+    dst.source.flRolloffFactor = EAXSOURCE_DEFAULTROLLOFFFACTOR;
+    dst.source.flRoomRolloffFactor = src.flRoomRolloffFactor;
+    dst.source.flAirAbsorptionFactor = src.flAirAbsorptionFactor;
+    dst.source.ulFlags = src.dwFlags;
+    dst.source.flMacroFXFactor = EAXSOURCE_DEFAULTMACROFXFACTOR;
+
+    // Set everything else to defaults.
+    //
+    eax5_set_sends_defaults(dst.sends);
+    eax5_set_active_fx_slots_defaults(dst.active_fx_slots);
+    eax5_set_speaker_levels_defaults(dst.speaker_levels);
+}
+
+void al::Source::eax3_translate(const EAX30SOURCEPROPERTIES& src, Eax5Props& dst) noexcept
+{
+    // Source.
+    //
+    static_cast<EAX30SOURCEPROPERTIES&>(dst.source) = src;
+    dst.source.flMacroFXFactor = EAXSOURCE_DEFAULTMACROFXFACTOR;
+
+    // Set everything else to defaults.
+    //
+    eax5_set_sends_defaults(dst.sends);
+    eax5_set_active_fx_slots_defaults(dst.active_fx_slots);
+    eax5_set_speaker_levels_defaults(dst.speaker_levels);
+}
+
+void al::Source::eax4_translate(const Eax4Props& src, Eax5Props& dst) noexcept
+{
+    // Source.
+    //
+    static_cast<EAX30SOURCEPROPERTIES&>(dst.source) = src.source;
+    dst.source.flMacroFXFactor = EAXSOURCE_DEFAULTMACROFXFACTOR;
+
+    // Sends.
+    //
+    dst.sends = src.sends;
+
+    for(auto const i : std::views::iota(0_uz, std::size_t{EAX_MAX_FXSLOTS}))
+        dst.sends[i].guidReceivingFXSlotID = *(eax5_fx_slot_ids[i]);
+
+    // Active FX slots.
+    //
+    const auto src_slots = std::span{src.active_fx_slots.guidActiveFXSlots};
+    const auto dst_slots = std::span{dst.active_fx_slots.guidActiveFXSlots};
+    auto dstiter = std::ranges::transform(src_slots, dst_slots.begin(), [](AL_GUID const& src_id)
+        -> AL_GUID
+    {
+        if(src_id == EAX_NULL_GUID)
+            return EAX_NULL_GUID;
+        if(src_id == EAX_PrimaryFXSlotID)
+            return EAX_PrimaryFXSlotID;
+        if(src_id == EAXPROPERTYID_EAX40_FXSlot0)
+            return EAXPROPERTYID_EAX50_FXSlot0;
+        if(src_id == EAXPROPERTYID_EAX40_FXSlot1)
+            return EAXPROPERTYID_EAX50_FXSlot1;
+        if(src_id == EAXPROPERTYID_EAX40_FXSlot2)
+            return EAXPROPERTYID_EAX50_FXSlot2;
+        if(src_id == EAXPROPERTYID_EAX40_FXSlot3)
+            return EAXPROPERTYID_EAX50_FXSlot3;
+
+        [[unlikely]]
+        ERR("Unexpected active FX slot ID");
+        return EAX_NULL_GUID;
+    }).out;
+    std::ranges::fill(dstiter, dst_slots.end(), EAX_NULL_GUID);
+
+    // Speaker levels.
+    //
+    eax5_set_speaker_levels_defaults(dst.speaker_levels);
+}
+
+auto al::Source::eax_calculate_dst_occlusion_mb(eax_long const src_occlusion_mb,
+    float const path_ratio, float const lf_ratio) noexcept -> float
+{
+    const auto ratio_1 = path_ratio + lf_ratio - 1.0f;
+    const auto ratio_2 = path_ratio * lf_ratio;
+    return gsl::narrow_cast<float>(src_occlusion_mb) * std::max(ratio_2, ratio_1);
+}
+
+auto al::Source::eax_create_direct_filter_param() const noexcept -> EaxAlLowPassParam
+{
+    const auto &source = mEax.source;
+
+    auto gain_mb = gsl::narrow_cast<float>(source.mObstruction.lObstruction)
+        * source.mObstruction.flObstructionLFRatio;
+    auto gainhf_mb = gsl::narrow_cast<float>(source.mObstruction.lObstruction);
+
+    for(const auto i : std::views::iota(0_uz, std::size_t{EAX_MAX_FXSLOTS}))
+    {
+        if(!mEaxActiveFxSlots.test(i))
+            continue;
+
+        const auto &fx_slot = mEaxAlContext->eaxGetFxSlot(i);
+        const auto &fx_slot_eax = fx_slot.eax_get_eax_fx_slot();
+        if(!(fx_slot_eax.ulFlags&EAXFXSLOTFLAGS_ENVIRONMENT))
+            continue;
+
+        if(mEaxPrimaryFxSlotId.value_or(-1) == fx_slot.eax_get_index()
+            && source.mOcclusion.lOcclusion != 0)
+        {
+            gain_mb += eax_calculate_dst_occlusion_mb(source.mOcclusion.lOcclusion,
+                source.mOcclusion.flOcclusionDirectRatio, source.mOcclusion.flOcclusionLFRatio);
+
+            gainhf_mb += gsl::narrow_cast<float>(source.mOcclusion.lOcclusion)
+                * source.mOcclusion.flOcclusionDirectRatio;
+        }
+
+        const auto &send = mEax.sends[i];
+        if(send.mOcclusion.lOcclusion != 0)
+        {
+            gain_mb += eax_calculate_dst_occlusion_mb(send.mOcclusion.lOcclusion,
+                send.mOcclusion.flOcclusionDirectRatio, send.mOcclusion.flOcclusionLFRatio);
+
+            gainhf_mb += gsl::narrow_cast<float>(send.mOcclusion.lOcclusion)
+                * send.mOcclusion.flOcclusionDirectRatio;
+        }
+    }
+
+    /* gainhf_mb is the absolute mBFS of the filter's high-frequency volume,
+     * and gain_mb is the absolute mBFS of the filter's low-frequency volume.
+     * Adjust the HF volume to be relative to the LF volume, to make the
+     * appropriate main and relative HF filter volumes.
+     *
+     * Also add the Direct and DirectHF properties to the filter, which are
+     * already the main and relative HF volumes.
+     */
+    gainhf_mb -= gain_mb;
+
+    gain_mb += gsl::narrow_cast<float>(source.lDirect);
+    gainhf_mb += gsl::narrow_cast<float>(source.lDirectHF);
+
+    return EaxAlLowPassParam{level_mb_to_gain(gain_mb), level_mb_to_gain(gainhf_mb)};
+}
+
+auto al::Source::eax_create_room_filter_param(const al::EffectSlot &fx_slot,
+    const EAXSOURCEALLSENDPROPERTIES& send) const noexcept -> EaxAlLowPassParam
+{
+    auto gain_mb = 0.0f;
+    auto gainhf_mb = 0.0f;
+
+    const auto &fx_slot_eax = fx_slot.eax_get_eax_fx_slot();
+    if((fx_slot_eax.ulFlags & EAXFXSLOTFLAGS_ENVIRONMENT) != 0)
+    {
+        gain_mb += gsl::narrow_cast<float>(fx_slot_eax.lOcclusion)*fx_slot_eax.flOcclusionLFRatio
+            + eax_calculate_dst_occlusion_mb(send.mOcclusion.lOcclusion,
+                send.mOcclusion.flOcclusionRoomRatio, send.mOcclusion.flOcclusionLFRatio)
+            + gsl::narrow_cast<float>(send.mExclusion.lExclusion)
+                *send.mExclusion.flExclusionLFRatio;
+
+        gainhf_mb += gsl::narrow_cast<float>(fx_slot_eax.lOcclusion)
+            + gsl::narrow_cast<float>(send.mOcclusion.lOcclusion)
+                *send.mOcclusion.flOcclusionRoomRatio
+            + gsl::narrow_cast<float>(send.mExclusion.lExclusion);
+
+        const auto &source = mEax.source;
+        if(mEaxPrimaryFxSlotId.value_or(-1) == fx_slot.eax_get_index())
+        {
+            gain_mb += eax_calculate_dst_occlusion_mb(source.mOcclusion.lOcclusion,
+                source.mOcclusion.flOcclusionRoomRatio, source.mOcclusion.flOcclusionLFRatio);
+            gain_mb += gsl::narrow_cast<float>(source.mExclusion.lExclusion)
+                * source.mExclusion.flExclusionLFRatio;
+
+            gainhf_mb += gsl::narrow_cast<float>(source.mOcclusion.lOcclusion)
+                * source.mOcclusion.flOcclusionRoomRatio;
+            gainhf_mb += gsl::narrow_cast<float>(source.mExclusion.lExclusion);
+        }
+
+        gainhf_mb -= gain_mb;
+
+        gain_mb += gsl::narrow_cast<float>(source.lRoom);
+        gainhf_mb += gsl::narrow_cast<float>(source.lRoomHF);
+    }
+
+    gain_mb += gsl::narrow_cast<float>(send.mSend.lSend);
+    gainhf_mb += gsl::narrow_cast<float>(send.mSend.lSendHF);
+
+    return EaxAlLowPassParam{level_mb_to_gain(gain_mb), level_mb_to_gain(gainhf_mb)};
+}
+
+void al::Source::eax_update_direct_filter()
+{
+    const auto& direct_param = eax_create_direct_filter_param();
+    mDirect.mGain = direct_param.gain;
+    mDirect.mGainHF = direct_param.gain_hf;
+    mDirect.mHFReference = LowPassFreqRef;
+    mDirect.mGainLF = 1.0f;
+    mDirect.mLFReference = HighPassFreqRef;
+    mPropsDirty = true;
+}
+
+void al::Source::eax_update_room_filters()
+{
+    for(const auto i : std::views::iota(0_uz, std::size_t{EAX_MAX_FXSLOTS}))
+    {
+        if(!mEaxActiveFxSlots.test(i))
+            continue;
+
+        auto &fx_slot = mEaxAlContext->eaxGetFxSlot(i);
+        const auto &send = mEax.sends[i];
+        const auto &room_param = eax_create_room_filter_param(fx_slot, send);
+        eax_set_al_source_send(fx_slot.newReference(), i, room_param);
+    }
+}
+
+void al::Source::eax_set_efx_outer_gain_hf()
+{
+    mOuterGainHF = std::clamp(
+        level_mb_to_gain(gsl::narrow_cast<float>(mEax.source.lOutsideVolumeHF)),
+        AL_MIN_CONE_OUTER_GAINHF,
+        AL_MAX_CONE_OUTER_GAINHF);
+}
+
+void al::Source::eax_set_efx_doppler_factor()
+{
+    mDopplerFactor = mEax.source.flDopplerFactor;
+}
+
+void al::Source::eax_set_efx_rolloff_factor()
+{
+    mRolloffFactor2 = mEax.source.flRolloffFactor;
+}
+
+void al::Source::eax_set_efx_room_rolloff_factor()
+{
+    mRoomRolloffFactor = mEax.source.flRoomRolloffFactor;
+}
+
+void al::Source::eax_set_efx_air_absorption_factor()
+{
+    mAirAbsorptionFactor = mEax.source.flAirAbsorptionFactor;
+}
+
+void al::Source::eax_set_efx_dry_gain_hf_auto()
+{
+    mDryGainHFAuto = ((mEax.source.ulFlags & EAXSOURCEFLAGS_DIRECTHFAUTO) != 0);
+}
+
+void al::Source::eax_set_efx_wet_gain_auto()
+{
+    mWetGainAuto = ((mEax.source.ulFlags & EAXSOURCEFLAGS_ROOMAUTO) != 0);
+}
+
+void al::Source::eax_set_efx_wet_gain_hf_auto()
+{
+    mWetGainHFAuto = ((mEax.source.ulFlags & EAXSOURCEFLAGS_ROOMHFAUTO) != 0);
+}
+
+void al::Source::eax1_set(const EaxCall& call, EAXBUFFER_REVERBPROPERTIES& props)
+{
+    switch(call.get_property_id())
+    {
+    case DSPROPERTY_EAXBUFFER_ALL:
+        eax_defer(call, props, Eax1SourceAllValidator{});
+        break;
+
+    case DSPROPERTY_EAXBUFFER_REVERBMIX:
+        eax_defer(call, props.fMix, Eax1SourceReverbMixValidator{});
+        break;
+
+    default:
+        eax_fail_unknown_property_id();
+    }
+}
+
+void al::Source::eax2_set(const EaxCall& call, EAX20BUFFERPROPERTIES& props)
+{
+    switch(call.get_property_id())
+    {
+    case DSPROPERTY_EAX20BUFFER_NONE:
+        break;
+
+    case DSPROPERTY_EAX20BUFFER_ALLPARAMETERS:
+        eax_defer(call, props, Eax2SourceAllValidator{});
+        break;
+
+    case DSPROPERTY_EAX20BUFFER_DIRECT:
+        eax_defer(call, props.lDirect, Eax2SourceDirectValidator{});
+        break;
+
+    case DSPROPERTY_EAX20BUFFER_DIRECTHF:
+        eax_defer(call, props.lDirectHF, Eax2SourceDirectHfValidator{});
+        break;
+
+    case DSPROPERTY_EAX20BUFFER_ROOM:
+        eax_defer(call, props.lRoom, Eax2SourceRoomValidator{});
+        break;
+
+    case DSPROPERTY_EAX20BUFFER_ROOMHF:
+        eax_defer(call, props.lRoomHF, Eax2SourceRoomHfValidator{});
+        break;
+
+    case DSPROPERTY_EAX20BUFFER_ROOMROLLOFFFACTOR:
+        eax_defer(call, props.flRoomRolloffFactor, Eax2SourceRoomRolloffFactorValidator{});
+        break;
+
+    case DSPROPERTY_EAX20BUFFER_OBSTRUCTION:
+        eax_defer(call, props.lObstruction, Eax2SourceObstructionValidator{});
+        break;
+
+    case DSPROPERTY_EAX20BUFFER_OBSTRUCTIONLFRATIO:
+        eax_defer(call, props.flObstructionLFRatio, Eax2SourceObstructionLfRatioValidator{});
+        break;
+
+    case DSPROPERTY_EAX20BUFFER_OCCLUSION:
+        eax_defer(call, props.lOcclusion, Eax2SourceOcclusionValidator{});
+        break;
+
+    case DSPROPERTY_EAX20BUFFER_OCCLUSIONLFRATIO:
+        eax_defer(call, props.flOcclusionLFRatio, Eax2SourceOcclusionLfRatioValidator{});
+        break;
+
+    case DSPROPERTY_EAX20BUFFER_OCCLUSIONROOMRATIO:
+        eax_defer(call, props.flOcclusionRoomRatio, Eax2SourceOcclusionRoomRatioValidator{});
+        break;
+
+    case DSPROPERTY_EAX20BUFFER_OUTSIDEVOLUMEHF:
+        eax_defer(call, props.lOutsideVolumeHF, Eax2SourceOutsideVolumeHfValidator{});
+        break;
+
+    case DSPROPERTY_EAX20BUFFER_AIRABSORPTIONFACTOR:
+        eax_defer(call, props.flAirAbsorptionFactor, Eax2SourceAirAbsorptionFactorValidator{});
+        break;
+
+    case DSPROPERTY_EAX20BUFFER_FLAGS:
+        eax_defer(call, props.dwFlags, Eax2SourceFlagsValidator{});
+        break;
+
+    default:
+        eax_fail_unknown_property_id();
+    }
+}
+
+void al::Source::eax3_set(const EaxCall& call, EAX30SOURCEPROPERTIES& props)
+{
+    switch(call.get_property_id())
+    {
+    case EAXSOURCE_NONE:
+        break;
+
+    case EAXSOURCE_ALLPARAMETERS:
+        eax_defer(call, props, Eax3SourceAllValidator{});
+        break;
+
+    case EAXSOURCE_OBSTRUCTIONPARAMETERS:
+        eax_defer(call, props.mObstruction, Eax4ObstructionValidator{});
+        break;
+
+    case EAXSOURCE_OCCLUSIONPARAMETERS:
+        eax_defer(call, props.mOcclusion, Eax4OcclusionValidator{});
+        break;
+
+    case EAXSOURCE_EXCLUSIONPARAMETERS:
+        eax_defer(call, props.mExclusion, Eax4ExclusionValidator{});
+        break;
+
+    case EAXSOURCE_DIRECT:
+        eax_defer(call, props.lDirect, Eax2SourceDirectValidator{});
+        break;
+
+    case EAXSOURCE_DIRECTHF:
+        eax_defer(call, props.lDirectHF, Eax2SourceDirectHfValidator{});
+        break;
+
+    case EAXSOURCE_ROOM:
+        eax_defer(call, props.lRoom, Eax2SourceRoomValidator{});
+        break;
+
+    case EAXSOURCE_ROOMHF:
+        eax_defer(call, props.lRoomHF, Eax2SourceRoomHfValidator{});
+        break;
+
+    case EAXSOURCE_OBSTRUCTION:
+        eax_defer(call, props.mObstruction.lObstruction, Eax2SourceObstructionValidator{});
+        break;
+
+    case EAXSOURCE_OBSTRUCTIONLFRATIO:
+        eax_defer(call, props.mObstruction.flObstructionLFRatio,
+            Eax2SourceObstructionLfRatioValidator{});
+        break;
+
+    case EAXSOURCE_OCCLUSION:
+        eax_defer(call, props.mOcclusion.lOcclusion, Eax2SourceOcclusionValidator{});
+        break;
+
+    case EAXSOURCE_OCCLUSIONLFRATIO:
+        eax_defer(call, props.mOcclusion.flOcclusionLFRatio,
+            Eax2SourceOcclusionLfRatioValidator{});
+        break;
+
+    case EAXSOURCE_OCCLUSIONROOMRATIO:
+        eax_defer(call, props.mOcclusion.flOcclusionRoomRatio,
+            Eax2SourceOcclusionRoomRatioValidator{});
+        break;
+
+    case EAXSOURCE_OCCLUSIONDIRECTRATIO:
+        eax_defer(call, props.mOcclusion.flOcclusionDirectRatio,
+            Eax3SourceOcclusionDirectRatioValidator{});
+        break;
+
+    case EAXSOURCE_EXCLUSION:
+        eax_defer(call, props.mExclusion.lExclusion, Eax3SourceExclusionValidator{});
+        break;
+
+    case EAXSOURCE_EXCLUSIONLFRATIO:
+        eax_defer(call, props.mExclusion.flExclusionLFRatio,
+            Eax3SourceExclusionLfRatioValidator{});
+        break;
+
+    case EAXSOURCE_OUTSIDEVOLUMEHF:
+        eax_defer(call, props.lOutsideVolumeHF, Eax2SourceOutsideVolumeHfValidator{});
+        break;
+
+    case EAXSOURCE_DOPPLERFACTOR:
+        eax_defer(call, props.flDopplerFactor, Eax3SourceDopplerFactorValidator{});
+        break;
+
+    case EAXSOURCE_ROLLOFFFACTOR:
+        eax_defer(call, props.flRolloffFactor, Eax3SourceRolloffFactorValidator{});
+        break;
+
+    case EAXSOURCE_ROOMROLLOFFFACTOR:
+        eax_defer(call, props.flRoomRolloffFactor, Eax2SourceRoomRolloffFactorValidator{});
+        break;
+
+    case EAXSOURCE_AIRABSORPTIONFACTOR:
+        eax_defer(call, props.flAirAbsorptionFactor, Eax2SourceAirAbsorptionFactorValidator{});
+        break;
+
+    case EAXSOURCE_FLAGS:
+        eax_defer(call, props.ulFlags, Eax2SourceFlagsValidator{});
+        break;
+
+    default:
+        eax_fail_unknown_property_id();
+    }
+}
+
+void al::Source::eax4_set(const EaxCall& call, Eax4Props& props)
+{
+    switch(call.get_property_id())
+    {
+    case EAXSOURCE_NONE:
+    case EAXSOURCE_ALLPARAMETERS:
+    case EAXSOURCE_OBSTRUCTIONPARAMETERS:
+    case EAXSOURCE_OCCLUSIONPARAMETERS:
+    case EAXSOURCE_EXCLUSIONPARAMETERS:
+    case EAXSOURCE_DIRECT:
+    case EAXSOURCE_DIRECTHF:
+    case EAXSOURCE_ROOM:
+    case EAXSOURCE_ROOMHF:
+    case EAXSOURCE_OBSTRUCTION:
+    case EAXSOURCE_OBSTRUCTIONLFRATIO:
+    case EAXSOURCE_OCCLUSION:
+    case EAXSOURCE_OCCLUSIONLFRATIO:
+    case EAXSOURCE_OCCLUSIONROOMRATIO:
+    case EAXSOURCE_OCCLUSIONDIRECTRATIO:
+    case EAXSOURCE_EXCLUSION:
+    case EAXSOURCE_EXCLUSIONLFRATIO:
+    case EAXSOURCE_OUTSIDEVOLUMEHF:
+    case EAXSOURCE_DOPPLERFACTOR:
+    case EAXSOURCE_ROLLOFFFACTOR:
+    case EAXSOURCE_ROOMROLLOFFFACTOR:
+    case EAXSOURCE_AIRABSORPTIONFACTOR:
+    case EAXSOURCE_FLAGS:
+        eax3_set(call, props.source);
+        break;
+
+    case EAXSOURCE_SENDPARAMETERS:
+        eax4_defer_sends<EAXSOURCESENDPROPERTIES>(call, props.sends, Eax4SendValidator{});
+        break;
+
+    case EAXSOURCE_ALLSENDPARAMETERS:
+        eax4_defer_sends<EAXSOURCEALLSENDPROPERTIES>(call, props.sends,
+            Eax4AllSendValidator{});
+        break;
+
+    case EAXSOURCE_OCCLUSIONSENDPARAMETERS:
+        eax4_defer_sends<EAXSOURCEOCCLUSIONSENDPROPERTIES>(call, props.sends,
+            Eax4OcclusionSendValidator{});
+        break;
+
+    case EAXSOURCE_EXCLUSIONSENDPARAMETERS:
+        eax4_defer_sends<EAXSOURCEEXCLUSIONSENDPROPERTIES>(call, props.sends,
+            Eax4ExclusionSendValidator{});
+        break;
+
+    case EAXSOURCE_ACTIVEFXSLOTID:
+        eax4_defer_active_fx_slot_id(call, props.active_fx_slots.guidActiveFXSlots);
+        break;
+
+    default:
+        eax_fail_unknown_property_id();
+    }
+}
+
+void al::Source::eax5_defer_all_2d(const EaxCall& call, EAX50SOURCEPROPERTIES& props)
+{
+    const auto &src_props = call.load<const EAXSOURCE2DPROPERTIES>();
+    Eax5SourceAll2dValidator{}(src_props);
+    props.lDirect = src_props.lDirect;
+    props.lDirectHF = src_props.lDirectHF;
+    props.lRoom = src_props.lRoom;
+    props.lRoomHF = src_props.lRoomHF;
+    props.ulFlags = src_props.ulFlags;
+}
+
+void al::Source::eax5_defer_speaker_levels(const EaxCall& call, EaxSpeakerLevels& props)
+{
+    const auto values = call.as_span<const EAXSPEAKERLEVELPROPERTIES>(eax_max_speakers);
+    std::ranges::for_each(values, Eax5SpeakerAllValidator{});
+
+    for(const auto &value : values)
+    {
+        const auto index = gsl::narrow_cast<std::size_t>(value.lSpeakerID-EAXSPEAKER_FRONT_LEFT);
+        props[index].lLevel = value.lLevel;
+    }
+}
+
+void al::Source::eax5_set(const EaxCall& call, Eax5Props& props)
+{
+    switch(call.get_property_id())
+    {
+    case EAXSOURCE_NONE:
+        break;
+
+    case EAXSOURCE_ALLPARAMETERS:
+        eax_defer(call, props.source, Eax5SourceAllValidator{});
+        break;
+
+    case EAXSOURCE_OBSTRUCTIONPARAMETERS:
+    case EAXSOURCE_OCCLUSIONPARAMETERS:
+    case EAXSOURCE_EXCLUSIONPARAMETERS:
+    case EAXSOURCE_DIRECT:
+    case EAXSOURCE_DIRECTHF:
+    case EAXSOURCE_ROOM:
+    case EAXSOURCE_ROOMHF:
+    case EAXSOURCE_OBSTRUCTION:
+    case EAXSOURCE_OBSTRUCTIONLFRATIO:
+    case EAXSOURCE_OCCLUSION:
+    case EAXSOURCE_OCCLUSIONLFRATIO:
+    case EAXSOURCE_OCCLUSIONROOMRATIO:
+    case EAXSOURCE_OCCLUSIONDIRECTRATIO:
+    case EAXSOURCE_EXCLUSION:
+    case EAXSOURCE_EXCLUSIONLFRATIO:
+    case EAXSOURCE_OUTSIDEVOLUMEHF:
+    case EAXSOURCE_DOPPLERFACTOR:
+    case EAXSOURCE_ROLLOFFFACTOR:
+    case EAXSOURCE_ROOMROLLOFFFACTOR:
+    case EAXSOURCE_AIRABSORPTIONFACTOR:
+        eax3_set(call, props.source);
+        break;
+
+    case EAXSOURCE_FLAGS:
+        eax_defer(call, props.source.ulFlags, Eax5SourceFlagsValidator{});
+        break;
+
+    case EAXSOURCE_SENDPARAMETERS:
+        eax5_defer_sends<EAXSOURCESENDPROPERTIES>(call, props.sends, Eax5SendValidator{});
+        break;
+
+    case EAXSOURCE_ALLSENDPARAMETERS:
+        eax5_defer_sends<EAXSOURCEALLSENDPROPERTIES>(call, props.sends,
+            Eax5AllSendValidator{});
+        break;
+
+    case EAXSOURCE_OCCLUSIONSENDPARAMETERS:
+        eax5_defer_sends<EAXSOURCEOCCLUSIONSENDPROPERTIES>(call, props.sends,
+            Eax5OcclusionSendValidator{});
+        break;
+
+    case EAXSOURCE_EXCLUSIONSENDPARAMETERS:
+        eax5_defer_sends<EAXSOURCEEXCLUSIONSENDPROPERTIES>(call, props.sends,
+            Eax5ExclusionSendValidator{});
+        break;
+
+    case EAXSOURCE_ACTIVEFXSLOTID:
+        eax5_defer_active_fx_slot_id(call, props.active_fx_slots.guidActiveFXSlots);
+        break;
+
+    case EAXSOURCE_MACROFXFACTOR:
+        eax_defer(call, props.source.flMacroFXFactor, Eax5SourceMacroFXFactorValidator{});
+        break;
+
+    case EAXSOURCE_SPEAKERLEVELS:
+        eax5_defer_speaker_levels(call, props.speaker_levels);
+        break;
+
+    case EAXSOURCE_ALL2DPARAMETERS:
+        eax5_defer_all_2d(call, props.source);
+        break;
+
+    default:
+        eax_fail_unknown_property_id();
+    }
+}
+
+void al::Source::eax_set(const EaxCall& call)
+{
+    const auto eax_version = call.get_version();
+    switch(eax_version)
+    {
+    case 1: eax1_set(call, mEax1.d); break;
+    case 2: eax2_set(call, mEax2.d); break;
+    case 3: eax3_set(call, mEax3.d); break;
+    case 4: eax4_set(call, mEax4.d); break;
+    case 5: eax5_set(call, mEax5.d); break;
+    default: eax_fail_unknown_property_id();
+    }
+    mEaxChanged = true;
+    mEaxVersion = eax_version;
+}
+
+void al::Source::eax_get_active_fx_slot_id(EaxCall const& call,
+    std::span<AL_GUID const> const srcids)
+{
+    Expects(srcids.size()==EAX40_MAX_ACTIVE_FXSLOTS || srcids.size()==EAX50_MAX_ACTIVE_FXSLOTS);
+    const auto dst_ids = call.as_span<AL_GUID>(srcids.size());
+    std::uninitialized_copy_n(srcids.begin(), dst_ids.size(), dst_ids.begin());
+}
+
+void al::Source::eax1_get(const EaxCall& call, const EAXBUFFER_REVERBPROPERTIES& props)
+{
+    switch(call.get_property_id())
+    {
+    case DSPROPERTY_EAXBUFFER_ALL:
+    case DSPROPERTY_EAXBUFFER_REVERBMIX:
+        call.store(props.fMix);
+        break;
+
+    default:
+        eax_fail_unknown_property_id();
+    }
+}
+
+void al::Source::eax2_get(const EaxCall& call, const EAX20BUFFERPROPERTIES& props)
+{
+    switch(call.get_property_id())
+    {
+    case DSPROPERTY_EAX20BUFFER_NONE: break;
+    case DSPROPERTY_EAX20BUFFER_ALLPARAMETERS: call.store(props); break;
+    case DSPROPERTY_EAX20BUFFER_DIRECT: call.store(props.lDirect); break;
+    case DSPROPERTY_EAX20BUFFER_DIRECTHF: call.store(props.lDirectHF); break;
+    case DSPROPERTY_EAX20BUFFER_ROOM: call.store(props.lRoom); break;
+    case DSPROPERTY_EAX20BUFFER_ROOMHF: call.store(props.lRoomHF); break;
+    case DSPROPERTY_EAX20BUFFER_ROOMROLLOFFFACTOR: call.store(props.flRoomRolloffFactor); break;
+    case DSPROPERTY_EAX20BUFFER_OBSTRUCTION: call.store(props.lObstruction); break;
+    case DSPROPERTY_EAX20BUFFER_OBSTRUCTIONLFRATIO: call.store(props.flObstructionLFRatio); break;
+    case DSPROPERTY_EAX20BUFFER_OCCLUSION: call.store(props.lOcclusion); break;
+    case DSPROPERTY_EAX20BUFFER_OCCLUSIONLFRATIO: call.store(props.flOcclusionLFRatio); break;
+    case DSPROPERTY_EAX20BUFFER_OCCLUSIONROOMRATIO: call.store(props.flOcclusionRoomRatio); break;
+    case DSPROPERTY_EAX20BUFFER_OUTSIDEVOLUMEHF: call.store(props.lOutsideVolumeHF); break;
+    case DSPROPERTY_EAX20BUFFER_AIRABSORPTIONFACTOR: call.store(props.flAirAbsorptionFactor);break;
+    case DSPROPERTY_EAX20BUFFER_FLAGS: call.store(props.dwFlags); break;
+    default: eax_fail_unknown_property_id();
+    }
+}
+
+void al::Source::eax3_get(const EaxCall &call, const EAX30SOURCEPROPERTIES &props)
+{
+    switch(call.get_property_id())
+    {
+    case EAXSOURCE_NONE: break;
+    case EAXSOURCE_ALLPARAMETERS: call.store(props); break;
+    case EAXSOURCE_OBSTRUCTIONPARAMETERS: call.store(props.mObstruction); break;
+    case EAXSOURCE_OCCLUSIONPARAMETERS: call.store(props.mOcclusion); break;
+    case EAXSOURCE_EXCLUSIONPARAMETERS: call.store(props.mExclusion); break;
+    case EAXSOURCE_DIRECT: call.store(props.lDirect); break;
+    case EAXSOURCE_DIRECTHF: call.store(props.lDirectHF); break;
+    case EAXSOURCE_ROOM: call.store(props.lRoom); break;
+    case EAXSOURCE_ROOMHF: call.store(props.lRoomHF); break;
+    case EAXSOURCE_OBSTRUCTION: call.store(props.mObstruction.lObstruction); break;
+    case EAXSOURCE_OBSTRUCTIONLFRATIO: call.store(props.mObstruction.flObstructionLFRatio); break;
+    case EAXSOURCE_OCCLUSION: call.store(props.mOcclusion.lOcclusion); break;
+    case EAXSOURCE_OCCLUSIONLFRATIO: call.store(props.mOcclusion.flOcclusionLFRatio); break;
+    case EAXSOURCE_OCCLUSIONROOMRATIO: call.store(props.mOcclusion.flOcclusionRoomRatio); break;
+    case EAXSOURCE_OCCLUSIONDIRECTRATIO: call.store(props.mOcclusion.flOcclusionDirectRatio);break;
+    case EAXSOURCE_EXCLUSION: call.store(props.mExclusion.lExclusion); break;
+    case EAXSOURCE_EXCLUSIONLFRATIO: call.store(props.mExclusion.flExclusionLFRatio); break;
+    case EAXSOURCE_OUTSIDEVOLUMEHF: call.store(props.lOutsideVolumeHF); break;
+    case EAXSOURCE_DOPPLERFACTOR: call.store(props.flDopplerFactor); break;
+    case EAXSOURCE_ROLLOFFFACTOR: call.store(props.flRolloffFactor); break;
+    case EAXSOURCE_ROOMROLLOFFFACTOR: call.store(props.flRoomRolloffFactor); break;
+    case EAXSOURCE_AIRABSORPTIONFACTOR: call.store(props.flAirAbsorptionFactor); break;
+    case EAXSOURCE_FLAGS: call.store(props.ulFlags); break;
+    default: eax_fail_unknown_property_id();
+    }
+}
+
+void al::Source::eax4_get(const EaxCall &call, const Eax4Props &props)
+{
+    switch(call.get_property_id())
+    {
+    case EAXSOURCE_NONE:
+        break;
+
+    case EAXSOURCE_ALLPARAMETERS:
+    case EAXSOURCE_OBSTRUCTIONPARAMETERS:
+    case EAXSOURCE_OCCLUSIONPARAMETERS:
+    case EAXSOURCE_EXCLUSIONPARAMETERS:
+    case EAXSOURCE_DIRECT:
+    case EAXSOURCE_DIRECTHF:
+    case EAXSOURCE_ROOM:
+    case EAXSOURCE_ROOMHF:
+    case EAXSOURCE_OBSTRUCTION:
+    case EAXSOURCE_OBSTRUCTIONLFRATIO:
+    case EAXSOURCE_OCCLUSION:
+    case EAXSOURCE_OCCLUSIONLFRATIO:
+    case EAXSOURCE_OCCLUSIONROOMRATIO:
+    case EAXSOURCE_OCCLUSIONDIRECTRATIO:
+    case EAXSOURCE_EXCLUSION:
+    case EAXSOURCE_EXCLUSIONLFRATIO:
+    case EAXSOURCE_OUTSIDEVOLUMEHF:
+    case EAXSOURCE_DOPPLERFACTOR:
+    case EAXSOURCE_ROLLOFFFACTOR:
+    case EAXSOURCE_ROOMROLLOFFFACTOR:
+    case EAXSOURCE_AIRABSORPTIONFACTOR:
+    case EAXSOURCE_FLAGS:
+        eax3_get(call, props.source);
+        break;
+
+    case EAXSOURCE_SENDPARAMETERS:
+        eax_get_sends<EAXSOURCESENDPROPERTIES>(call, props.sends);
+        break;
+
+    case EAXSOURCE_ALLSENDPARAMETERS:
+        eax_get_sends<EAXSOURCEALLSENDPROPERTIES>(call, props.sends);
+        break;
+
+    case EAXSOURCE_OCCLUSIONSENDPARAMETERS:
+        eax_get_sends<EAXSOURCEOCCLUSIONSENDPROPERTIES>(call, props.sends);
+        break;
+
+    case EAXSOURCE_EXCLUSIONSENDPARAMETERS:
+        eax_get_sends<EAXSOURCEEXCLUSIONSENDPROPERTIES>(call, props.sends);
+        break;
+
+    case EAXSOURCE_ACTIVEFXSLOTID:
+        eax_get_active_fx_slot_id(call, props.active_fx_slots.guidActiveFXSlots);
+        break;
+
+    default:
+        eax_fail_unknown_property_id();
+    }
+}
+
+void al::Source::eax5_get_all_2d(const EaxCall &call, const EAX50SOURCEPROPERTIES &props)
+{
+    auto &subprops = call.load<EAXSOURCE2DPROPERTIES>();
+    subprops.lDirect = props.lDirect;
+    subprops.lDirectHF = props.lDirectHF;
+    subprops.lRoom = props.lRoom;
+    subprops.lRoomHF = props.lRoomHF;
+    subprops.ulFlags = props.ulFlags;
+}
+
+void al::Source::eax5_get_speaker_levels(const EaxCall &call, const EaxSpeakerLevels &props)
+{
+    const auto subprops = call.as_span<EAXSPEAKERLEVELPROPERTIES>(eax_max_speakers);
+    std::uninitialized_copy_n(props.cbegin(), subprops.size(), subprops.begin());
+}
+
+void al::Source::eax5_get(const EaxCall &call, const Eax5Props &props)
+{
+    switch(call.get_property_id())
+    {
+    case EAXSOURCE_NONE:
+        break;
+
+    case EAXSOURCE_ALLPARAMETERS:
+    case EAXSOURCE_OBSTRUCTIONPARAMETERS:
+    case EAXSOURCE_OCCLUSIONPARAMETERS:
+    case EAXSOURCE_EXCLUSIONPARAMETERS:
+    case EAXSOURCE_DIRECT:
+    case EAXSOURCE_DIRECTHF:
+    case EAXSOURCE_ROOM:
+    case EAXSOURCE_ROOMHF:
+    case EAXSOURCE_OBSTRUCTION:
+    case EAXSOURCE_OBSTRUCTIONLFRATIO:
+    case EAXSOURCE_OCCLUSION:
+    case EAXSOURCE_OCCLUSIONLFRATIO:
+    case EAXSOURCE_OCCLUSIONROOMRATIO:
+    case EAXSOURCE_OCCLUSIONDIRECTRATIO:
+    case EAXSOURCE_EXCLUSION:
+    case EAXSOURCE_EXCLUSIONLFRATIO:
+    case EAXSOURCE_OUTSIDEVOLUMEHF:
+    case EAXSOURCE_DOPPLERFACTOR:
+    case EAXSOURCE_ROLLOFFFACTOR:
+    case EAXSOURCE_ROOMROLLOFFFACTOR:
+    case EAXSOURCE_AIRABSORPTIONFACTOR:
+    case EAXSOURCE_FLAGS:
+        eax3_get(call, props.source);
+        break;
+
+    case EAXSOURCE_SENDPARAMETERS:
+        eax_get_sends<EAXSOURCESENDPROPERTIES>(call, props.sends);
+        break;
+
+    case EAXSOURCE_ALLSENDPARAMETERS:
+        eax_get_sends<EAXSOURCEALLSENDPROPERTIES>(call, props.sends);
+        break;
+
+    case EAXSOURCE_OCCLUSIONSENDPARAMETERS:
+        eax_get_sends<EAXSOURCEOCCLUSIONSENDPROPERTIES>(call, props.sends);
+        break;
+
+    case EAXSOURCE_EXCLUSIONSENDPARAMETERS:
+        eax_get_sends<EAXSOURCEEXCLUSIONSENDPROPERTIES>(call, props.sends);
+        break;
+
+    case EAXSOURCE_ACTIVEFXSLOTID:
+        eax_get_active_fx_slot_id(call, props.active_fx_slots.guidActiveFXSlots);
+        break;
+
+    case EAXSOURCE_MACROFXFACTOR:
+        call.store(props.source.flMacroFXFactor);
+        break;
+
+    case EAXSOURCE_SPEAKERLEVELS:
+        call.store(props.speaker_levels);
+        break;
+
+    case EAXSOURCE_ALL2DPARAMETERS:
+        eax5_get_all_2d(call, props.source);
+        break;
+
+    default:
+        eax_fail_unknown_property_id();
+    }
+}
+
+void al::Source::eax_get(const EaxCall &call) const
+{
+    switch(call.get_version())
+    {
+    case 1: eax1_get(call, mEax1.i); break;
+    case 2: eax2_get(call, mEax2.i); break;
+    case 3: eax3_get(call, mEax3.i); break;
+    case 4: eax4_get(call, mEax4.i); break;
+    case 5: eax5_get(call, mEax5.i); break;
+    default: eax_fail_unknown_version();
+    }
+}
+
+void al::Source::eax_set_al_source_send(al::intrusive_ptr<al::EffectSlot> slot,
+    std::size_t const sendidx, const EaxAlLowPassParam &filter)
+{
+    if(sendidx >= EAX_MAX_FXSLOTS)
+        return;
+
+    auto &send = mSend[sendidx];
+    send.mSlot = std::move(slot);
+    send.mGain = filter.gain;
+    send.mGainHF = filter.gain_hf;
+    send.mHFReference = LowPassFreqRef;
+    send.mGainLF = 1.0f;
+    send.mLFReference = HighPassFreqRef;
+
+    mPropsDirty = true;
+}
+
+void al::Source::eax_commit_active_fx_slots()
+{
+    // Clear all slots to an inactive state.
+    mEaxActiveFxSlots.reset();
+
+    // Mark the set slots as active.
+    for(const auto& slot_id : mEax.active_fx_slots.guidActiveFXSlots)
+    {
+        if(slot_id == EAX_NULL_GUID)
+        {
+        }
+        else if(slot_id == EAX_PrimaryFXSlotID)
+        {
+            // Mark primary FX slot as active.
+            if(mEaxPrimaryFxSlotId.has_value())
+                mEaxActiveFxSlots.set(*mEaxPrimaryFxSlotId);
+        }
+        else if(slot_id == EAXPROPERTYID_EAX50_FXSlot0)
+            mEaxActiveFxSlots.set(0);
+        else if(slot_id == EAXPROPERTYID_EAX50_FXSlot1)
+            mEaxActiveFxSlots.set(1);
+        else if(slot_id == EAXPROPERTYID_EAX50_FXSlot2)
+            mEaxActiveFxSlots.set(2);
+        else if(slot_id == EAXPROPERTYID_EAX50_FXSlot3)
+            mEaxActiveFxSlots.set(3);
+    }
+
+    // Deactivate EFX auxiliary effect slots for inactive slots. Active slots
+    // will be updated with the room filters.
+    for(const auto i : std::views::iota(0_uz, std::size_t{EAX_MAX_FXSLOTS}))
+    {
+        if(!mEaxActiveFxSlots.test(i))
+            eax_set_al_source_send({}, i, EaxAlLowPassParam{1.0f, 1.0f});
+    }
+}
+
+void al::Source::eax_commit_filters()
+{
+    eax_update_direct_filter();
+    eax_update_room_filters();
+}
+
+void al::Source::eaxCommit()
+{
+    const auto primary_fx_slot_id = mEaxAlContext->eaxGetPrimaryFxSlotIndex();
+    const auto is_primary_fx_slot_id_changed = (mEaxPrimaryFxSlotId != primary_fx_slot_id);
+
+    if(!mEaxChanged && !is_primary_fx_slot_id_changed)
+        return;
+
+    mEaxPrimaryFxSlotId = primary_fx_slot_id;
+    mEaxChanged = false;
+
+    switch(mEaxVersion)
+    {
+    case 1:
+        mEax1.i = mEax1.d;
+        eax1_translate(mEax1.i, mEax);
+        break;
+    case 2:
+        mEax2.i = mEax2.d;
+        eax2_translate(mEax2.i, mEax);
+        break;
+    case 3:
+        mEax3.i = mEax3.d;
+        eax3_translate(mEax3.i, mEax);
+        break;
+    case 4:
+        mEax4.i = mEax4.d;
+        eax4_translate(mEax4.i, mEax);
+        break;
+    case 5:
+        mEax5.i = mEax5.d;
+        mEax = mEax5.d;
+        break;
+    }
+
+    eax_set_efx_outer_gain_hf();
+    eax_set_efx_doppler_factor();
+    eax_set_efx_rolloff_factor();
+    eax_set_efx_room_rolloff_factor();
+    eax_set_efx_air_absorption_factor();
+    eax_set_efx_dry_gain_hf_auto();
+    eax_set_efx_wet_gain_auto();
+    eax_set_efx_wet_gain_hf_auto();
+
+    eax_commit_active_fx_slots();
+    eax_commit_filters();
+}
+
+#endif // ALSOFT_EAX
