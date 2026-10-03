@@ -1,4 +1,4 @@
-# COD4iOS
+# COD4iOS-COD4NS --> For now, only COD4iOS is available.
 
 Call of Duty 4: Modern Warfare on iPhone and iPad, based on [KisakCOD](https://github.com/SwagSoftware/KisakCOD).
 
