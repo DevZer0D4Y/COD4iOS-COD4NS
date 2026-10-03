@@ -6,6 +6,14 @@ COD4iOS includes single-player and CoD4x multiplayer in one app, with touch cont
 
 **You need your own copy of the original PC game, Call of Duty 4: Modern Warfare (2007).** Modern Warfare Remastered files will not work. The source and IPA do not include the retail game data.
 
+If you want to support me and remain up-to-date about this and other projects, you can in different ways:
+
+Ko-Fi: https://ko-fi.com/dev_zer0
+
+Discord: https://discord.gg/uFChheZEWX
+
+YouTube: https://www.youtube.com/@develop_erZ
+
 ## What you need
 
 - An iPhone or iPad running iOS/iPadOS 17 or later.
