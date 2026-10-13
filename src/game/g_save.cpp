@@ -2202,7 +2202,7 @@ void __cdecl G_PrepareSaveMemoryForWrite(char commitLevel)
     //Memcard_CheckOngoingTasks();
     if (SaveMemory_IsWaitingForCommit(SaveHandle) && !v3 && (commitLevel & 6) != 0)
         SaveMemory_ForceCommitSave(SaveHandle);
-    if (SaveMemory_IsCurrentCommittedSaveValid() && (commitLevel & 4) != 0 && !SaveMemory_IsWrittenToDevice(SaveHandle))
+    if (SaveMemory_IsCurrentCommittedSaveValid() && (commitLevel & 4) != 0 && !SaveMemory_IsWrittenToDevice(SaveMemory_GetLastCommittedSave()))
         G_WriteCurrentCommitToDevice();
 }
 

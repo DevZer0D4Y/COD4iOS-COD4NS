@@ -3,6 +3,7 @@
 #endif
 
 #include <universal/q_shared.h>
+#include <cmath>
 #include <script/scr_animtree.h>
 
 #include "g_scr_main.h"
@@ -603,7 +604,7 @@ void __cdecl Scr_LoadLevel()
 {
     unsigned __int16 v0; // r3
 
-#ifdef __APPLE__
+#if (defined(__APPLE__) || defined(KISAK_NATIVE_PORT))
     // Level scripts such as maps/killhouse.gsc test level.console before calling maps\_utility::set_console_status(),
     // which later assigns (getdvar("consoleGame") == "true"). Pre-seed the same PC values when they are undefined
     // so the level main thread is not aborted by "cannot cast undefined to bool".
@@ -2204,7 +2205,7 @@ void __cdecl ScrCmd_attach(scr_entref_t entref)
         Scr_Error(v6);
     }
     const int attachResult = G_EntAttach(Entity, String, ConstLowercaseString, Int);
-#ifdef __APPLE__
+#if (defined(__APPLE__) || defined(KISAK_NATIVE_PORT))
     static int attachReports = 0;
     if (attachReports < 24)
     {
@@ -3424,7 +3425,7 @@ int __cdecl GScr_UpdateTagInternal(
     }
     if (showScriptError)
     {
-#ifdef __APPLE__
+#if (defined(__APPLE__) || defined(KISAK_NATIVE_PORT))
         static int tagFailReports = 0;
         if (tagFailReports < 6)
         {
@@ -6970,7 +6971,7 @@ void __cdecl GScr_SightConeTrace(scr_entref_t entref)
     GScr_DamageConeTraceInternal(entref, 2049);
 }
 
-#ifdef __APPLE__
+#if (defined(__APPLE__) || defined(KISAK_NATIVE_PORT))
 void __cdecl RuntimeErrorInternal(int channel, char *codePos, uint32_t index, const char *msg);
 // Diagnostic: print the script call stack when a script ends the level.
 static void GScr_TraceLevelEndCall(const char *builtinName)
@@ -6986,50 +6987,51 @@ static void GScr_TraceLevelEndCall(const char *builtinName)
 
 void GScr_ChangeLevel()
 {
-#ifdef __APPLE__
+#if (defined(__APPLE__) || defined(KISAK_NATIVE_PORT))
     GScr_TraceLevelEndCall("GScr_ChangeLevel");
 #endif
-    gentity_s *v0; // r31
-    unsigned int NumParam; // r3
-    long double v2; // fp2
-    long double v3; // fp2
-    const char *String; // r30
-    long double v5; // fp2
-    long double v6; // fp2
-
-    v0 = G_Find(0, offsetof(gentity_s, classname), scr_const.player);
-    if (!v0)
-        MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_scr_main.cpp", 7856, 0, "%s", "player");
-    if (v0->health > 0 && !g_reloading->current.integer)
+    const unsigned int count = Scr_GetNumParam();
+    if (count < 1 || count > 3)
     {
-        NumParam = Scr_GetNumParam();
-        if (NumParam != 1)
-        {
-            if (NumParam != 2)
-            {
-                *(double *)&v2 = (float)((float)(Scr_GetFloat(2) * (float)1000.0) + (float)0.5);
-                v3 = floor(v2);
-                level.exitTime = (int)(float)*(double *)&v3;
-                if ((int)(float)*(double *)&v3 < 0)
-                    Scr_ParamError(1u, "exitTime cannot be negative");
-            }
-            level.savepersist = Scr_GetInt(1);
-        }
-        String = Scr_GetString(0);
-        if (Scr_GetNumParam() > 2 && g_changelevel_time->current.value > 0.0)
-        {
-            *(double *)&v5 = (float)((float)(g_changelevel_time->current.value * (float)1000.0) + (float)0.5);
-            v6 = floor(v5);
-            level.exitTime = (int)(float)*(double *)&v6;
-        }
-        level.changelevel = 1;
-        G_SetNextMap(String);
+        Scr_Error("changelevel requires nextMap and optional persistent, exitTime parameters");
+        return;
     }
+    gentity_s *player = G_Find(0, offsetof(gentity_s, classname), scr_const.player);
+    if (!player || player->health <= 0 || g_reloading->current.integer)
+        return;
+
+    const char *nextMap = Scr_GetString(0);
+    const int persistent = count >= 2 ? Scr_GetInt(1) : 0;
+    int exitTime = 0;
+    if (count == 3)
+    {
+        const double requested = Scr_GetFloat(2);
+        if (!std::isfinite(requested) || requested < 0.0 || requested > 2147482.0)
+        {
+            Scr_ParamError(2u, "exitTime must be finite, nonnegative and within the timer range");
+            return;
+        }
+        double seconds = requested;
+        if (g_changelevel_time->current.value > 0.0f)
+            seconds = g_changelevel_time->current.value;
+        if (!std::isfinite(seconds) || seconds > 2147482.0)
+        {
+            Scr_Error("g_changelevel_time exceeds the timer range");
+            return;
+        }
+        // long double has different layouts on Apple and Android. Never write
+        // double bits into it or reinterpret its result as a different type.
+        exitTime = static_cast<int>(std::floor(seconds * 1000.0 + 0.5));
+    }
+    G_SetNextMap(nextMap);
+    level.savepersist = persistent;
+    level.exitTime = exitTime;
+    level.changelevel = 1;
 }
 
 void GScr_MissionSuccess()
 {
-#ifdef __APPLE__
+#if (defined(__APPLE__) || defined(KISAK_NATIVE_PORT))
     GScr_TraceLevelEndCall("GScr_MissionSuccess");
 #endif
     if (Scr_GetNumParam() > 2)
@@ -7042,7 +7044,7 @@ void GScr_MissionSuccess()
 
 void GScr_MissionFailed()
 {
-#ifdef __APPLE__
+#if (defined(__APPLE__) || defined(KISAK_NATIVE_PORT))
     GScr_TraceLevelEndCall("GScr_MissionFailed");
 #endif
     gentity_s *v0; // r3
@@ -7126,7 +7128,7 @@ void __cdecl GScr_SetMissionDvar()
 
 void GScr_Cinematic()
 {
-#ifdef __APPLE__
+#if (defined(__APPLE__) || defined(KISAK_NATIVE_PORT))
     GScr_TraceLevelEndCall("GScr_Cinematic");
 #endif
     long double v0; // fp2
@@ -11341,11 +11343,11 @@ void __cdecl GScr_SetScripts(ScriptFunctions *functions)
     g_scr_data.createstruct = GScr_SetScriptAndLabel(functions, "codescripts/struct", "createstruct", 1);
     GScr_SetAnimScripts(functions);
     GScr_SetLevelScript(functions);
-#ifdef __APPLE__
+#if (defined(__APPLE__) || defined(KISAK_NATIVE_PORT))
     Com_Printf(CON_CHANNEL_SERVER, "GScr: set pass used %d of %d before entities\n", functions->count, functions->maxSize);
 #endif
     GScr_SetScriptsAndAnimsForEntities(functions);
-#ifdef __APPLE__
+#if (defined(__APPLE__) || defined(KISAK_NATIVE_PORT))
     Com_Printf(CON_CHANNEL_SERVER, "GScr: set pass used %d of %d before path nodes\n", functions->count, functions->maxSize);
 #endif
     Path_CallFunctionForNodes(GScr_SetScriptsForPathNode, functions);

@@ -13,6 +13,7 @@
 #import <GameController/GameController.h>
 #include "../engine/controller_input.h"
 #import "touch_controls.h"
+#include "../save/SaveRecovery.h"
 #import "client_patch.h"
 
 // Com_Printf, so controller diagnostics land in the console log (stderr is not captured here).
@@ -372,6 +373,7 @@ static void *KISEngineThreadMain(void *argument)
     }
 #endif
     _started = YES;
+    kisak::savefile::PrepareDirectory(std::string(root.fileSystemRepresentation)+"/players");
     CGFloat scale = self.view.window.screen.nativeScale;
 #if TARGET_OS_SIMULATOR
     // Optional test setting: reduce render targets on memory-constrained Macs

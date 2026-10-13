@@ -41,6 +41,7 @@ inline void SwipeAxes(float dx,float dy,float seconds,float &x,float &y) {
     const float dt=std::max(seconds,.001f);
     x=dx*.25f/(180.0f*dt); y=-dy*.25f/(120.0f*dt);
 }
+struct Placement { float x=.5f,y=.5f,scale=1; bool custom=false; };
 class State {
     struct Capture {uintptr_t id; int control,button; Point anchor,point;};
     std::vector<Capture> captures;
@@ -48,6 +49,7 @@ class State {
     std::array<unsigned,Count> held{};
     float lookX=0,lookY=0;
     Rect safe{0,0,1,1};
+    std::array<Placement,count> layout{};
     bool gameplay=false,available=false;
 public:
     void SetBounds(Rect bounds) {
@@ -61,7 +63,24 @@ public:
     }
     bool Gameplay() const {return gameplay;}
     bool Available() const {return available;}
-    Rect Frame(size_t i) const {return Resolve(controls[i],safe);}
+    Placement GetPlacement(size_t i) const {
+        if(layout[i].custom)return layout[i];
+        const auto n=controls[i].normalized;
+        return {n.x+n.w*.5f,n.y+n.h*.5f,1,false};
+    }
+    void SetPlacement(size_t i,float x,float y,float scale) {
+        if(i>=count || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(scale))return;
+        Cancel();layout[i]={std::clamp(x,0.f,1.f),std::clamp(y,0.f,1.f),std::clamp(scale,.5f,2.f),true};
+    }
+    void ResetLayout(){Cancel();layout={};}
+    Rect SafeBounds()const{return safe;}
+    Rect Frame(size_t i) const {
+        Rect r=Resolve(controls[i],safe);if(!layout[i].custom)return r;
+        const auto n=layout[i];
+        const float side=std::min(std::min(safe.w,safe.h),std::max(24.f,r.w*n.scale));
+        return {safe.x+std::clamp(safe.w*n.x-side*.5f,0.f,std::max(0.f,safe.w-side)),
+                safe.y+std::clamp(safe.h*n.y-side*.5f,0.f,std::max(0.f,safe.h-side)),side,side};
+    }
     int Hit(Point p) const {
         if(!available)return -2;
         // Action buttons have priority over the full-screen look zone.

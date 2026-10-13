@@ -1,6 +1,18 @@
 add_subdirectory(core)
 add_subdirectory(assets)
 add_subdirectory(save)
+if(BUILD_TESTING AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_executable(kisakcod_checkpoint_file_tests engine/tests/NativeSaveFileTests.cpp)
+    target_compile_features(kisakcod_checkpoint_file_tests PRIVATE cxx_std_17)
+    target_compile_options(kisakcod_checkpoint_file_tests PRIVATE -UNDEBUG)
+    add_test(NAME campaign_checkpoint_files COMMAND kisakcod_checkpoint_file_tests)
+    add_executable(kisakcod_touch_layout_tests engine/tests/TouchLayoutTests.cpp)
+    target_compile_features(kisakcod_touch_layout_tests PRIVATE cxx_std_17)
+    target_compile_options(kisakcod_touch_layout_tests PRIVATE -UNDEBUG)
+    add_test(NAME touch_layout_geometry COMMAND kisakcod_touch_layout_tests)
+    add_test(NAME campaign_transitions COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/engine/tests/CampaignTransitionTests.py)
+endif()
 if(APPLE)
     add_subdirectory(platform)
     add_subdirectory(script)
@@ -104,6 +116,7 @@ if(KISAK_BUILD_ENGINE AND KISAK_BUILD_MP AND KISAK_BUILD_COMBINED)
             BUILD_WITH_INSTALL_NAME_DIR TRUE
             INSTALL_NAME_DIR "@executable_path/Frameworks")
         target_compile_features(kisakcod_${mode}_engine PRIVATE cxx_std_20)
+        target_compile_options(kisakcod_${mode}_engine PRIVATE -fobjc-arc)
         target_compile_definitions(kisakcod_${mode}_engine PRIVATE KISAK_ENGINE_AS_DYLIB)
         target_link_libraries(kisakcod_${mode}_engine PRIVATE
             "-framework Foundation" "-framework UIKit" "-framework QuartzCore" "-framework Metal"
@@ -123,8 +136,8 @@ if(KISAK_BUILD_ENGINE AND KISAK_BUILD_MP AND KISAK_BUILD_COMBINED)
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/app/Info.plist.in"
         MACOSX_BUNDLE_GUI_IDENTIFIER "${KISAK_COMBINED_BUNDLE_ID}"
         MACOSX_BUNDLE_BUNDLE_NAME "COD4iOS"
-        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0.3"
-        MACOSX_BUNDLE_BUNDLE_VERSION "4"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0.4"
+        MACOSX_BUNDLE_BUNDLE_VERSION "7"
         XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${KISAK_COMBINED_BUNDLE_ID}"
         XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
         XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME "AppIcon"
@@ -135,6 +148,16 @@ if(KISAK_BUILD_ENGINE AND KISAK_BUILD_MP AND KISAK_BUILD_COMBINED)
         XCODE_EMBED_FRAMEWORKS_CODE_SIGN_ON_COPY "YES")
     target_link_libraries(KisakCOD-Combined PRIVATE "-framework Foundation" "-framework UIKit")
     add_dependencies(KisakCOD-Combined kisakcod_sp_engine kisakcod_mp_engine)
+    if(NOT CMAKE_GENERATOR STREQUAL "Xcode")
+        # Re-run bundle staging when either engine changes, even if the shell
+        # sources do not. A target-order dependency alone does not re-link it.
+        set_property(TARGET KisakCOD-Combined APPEND PROPERTY LINK_DEPENDS
+            "$<TARGET_FILE:kisakcod_sp_engine>" "$<TARGET_FILE:kisakcod_mp_engine>")
+        add_custom_command(TARGET KisakCOD-Combined POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_DIR:KisakCOD-Combined>/Frameworks"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kisakcod_sp_engine>" "$<TARGET_BUNDLE_DIR:KisakCOD-Combined>/Frameworks/"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kisakcod_mp_engine>" "$<TARGET_BUNDLE_DIR:KisakCOD-Combined>/Frameworks/")
+    endif()
 endif()
 
 set(KISAK_IOS_BUNDLE_ID "org.kisakcod.iospreview" CACHE STRING "App bundle identifier")
@@ -177,7 +200,7 @@ set_target_properties(KisakCOD-iOS PROPERTIES
 # Shared native touch overlay for both standalone and combined engine shells.
 foreach(app_target KisakCOD-SP KisakCOD-MP kisakcod_sp_engine kisakcod_mp_engine)
     if(TARGET ${app_target})
-        target_sources(${app_target} PRIVATE app/touch_controls.mm app/client_patch.mm app/TouchControls.LICENSE)
+        target_sources(${app_target} PRIVATE app/touch_controls.mm app/TouchLayoutStore.mm app/client_patch.mm app/TouchControls.LICENSE)
         target_link_libraries(${app_target} PRIVATE "-framework CoreGraphics")
         set_source_files_properties(app/TouchControls.LICENSE PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
     endif()

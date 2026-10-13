@@ -5,7 +5,8 @@
 #include <universal/q_shared.h>
 #include "savedevice.h"
 #include <algorithm>
-#ifdef __APPLE__
+#include <unordered_map>
+#if (defined(__APPLE__) || defined(KISAK_NATIVE_PORT))
 #include "../../ports/ios/save/NativeSaveFile.h"
 #endif
 #include <qcommon/qcommon.h>
@@ -41,6 +42,7 @@
 
 
 static bool g_saveDevice_lastSaveSucceeded = true;
+static std::unordered_map<int, uint32_t> g_saveReadLengths;
 
 void __cdecl Memcard_InitializeSystem(void)
 {
@@ -154,6 +156,20 @@ int __cdecl OpenDevice(char const *name, void **fileHandle)
 	if (!fileHandle)
 		return -1;
 	int handle = 0;
+#if (defined(__APPLE__) || defined(KISAK_NATIVE_PORT))
+    if (name && strstr(name, "/save/") && !strstr(name, "..") && name[0] != '/')
+    {
+        const size_t length = strlen(name);
+        if (length > 4 && !strcmp(name + length - 4, ".svg"))
+        {
+            char physical[260];
+            const char *relative = !strncmp(name, "players/", 8) ? name + 8 : name;
+            FS_BuildOSPath(fs_homepath->current.string, "players", relative, physical);
+            if (!kisak::savefile::Complete(physical))
+                kisak::savefile::Recover(physical);
+        }
+    }
+#endif
 	unsigned int size = FS_FOpenFileRead(name, &handle);
 	if (!handle)
 	{
@@ -161,14 +177,27 @@ int __cdecl OpenDevice(char const *name, void **fileHandle)
 		return -1;
 	}
 	*fileHandle = (void *)(intptr_t)handle;
+    g_saveReadLengths[handle] = size;
 	return (int)size;
+}
+
+int __cdecl SaveDevice_RemainingBytes(void *fileHandle)
+{
+    const int handle = (int)(intptr_t)fileHandle;
+    const auto found = g_saveReadLengths.find(handle);
+    if (found == g_saveReadLengths.end()) return 0;
+    const uint32_t offset = FS_FTell(handle);
+    return offset <= found->second ? (int)(found->second - offset) : 0;
 }
 
 void __cdecl CloseDevice(void *fileHandle)
 {
 	int handle = (int)(intptr_t)fileHandle;
 	if (handle)
+	{
+		g_saveReadLengths.erase(handle);
 		FS_FCloseFile(handle);
+	}
 }
 
 int __cdecl ReadFromDevice(void *buffer, int size, void *fileHandle)
@@ -239,7 +268,8 @@ bool __cdecl SaveExists(char const *savename)
 
 int __cdecl WriteSaveToDevice(unsigned char *data, struct SaveHeader const *saveHeader, bool /*suppressPlayerNotify*/)
 {
-	if (!data || !saveHeader)
+	if (!data || !saveHeader || saveHeader->bodySize <= 0
+        || saveHeader->bodySize > 1572864 || saveHeader->saveVersion != 287)
 	{
 		g_saveDevice_lastSaveSucceeded = false;
 		return -1;
@@ -291,7 +321,7 @@ int __cdecl WriteSaveToDevice(unsigned char *data, struct SaveHeader const *save
 
 #ifdef KISAK_XBOX
 	g_saveDevice_lastSaveSucceeded = true;
-#elif defined(__APPLE__)
+#elif (defined(__APPLE__) || defined(KISAK_NATIVE_PORT))
     char temporary[260], destination[260];
     FS_BuildOSPath(fs_homepath->current.string, fs_gamedir, "save/temp.svg", temporary);
     FS_BuildOSPath(fs_homepath->current.string, "players", saveHeader->filename, destination);

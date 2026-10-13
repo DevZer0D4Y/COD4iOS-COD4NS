@@ -17,6 +17,7 @@ bool __cdecl SaveDevice_IsAccessingDevice(void);
 void __cdecl WriteSaveToDeviceCleanup(void);
 bool __cdecl SaveDevice_IsSaveSuccessful(void);
 int __cdecl ReadFromDevice(void *, int, void *);
+int __cdecl SaveDevice_RemainingBytes(void *fileHandle);
 int __cdecl OpenDevice(char const *, void **);
 void __cdecl CloseDevice(void *);
 bool __cdecl SaveExists(char const *);

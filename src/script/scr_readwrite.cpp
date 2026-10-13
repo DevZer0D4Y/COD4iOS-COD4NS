@@ -752,6 +752,17 @@ void __cdecl Scr_SaveSourceImmediate(SaveImmediate *save)
     if (!scrVarPub.developer)
         return;
 
+    if (scrParserPub.sourceBufferLookupLen > 65536
+        || (scrParserPub.sourceBufferLookupLen && !scrParserPub.sourceBufferLookup))
+    { save->f = nullptr; return; }
+    for (unsigned int index = 0; index < scrParserPub.sourceBufferLookupLen; ++index)
+    {
+        const auto &info = scrParserPub.sourceBufferLookup[index];
+        if (info.archive && (info.len < -1 || info.len > 16 * 1024 * 1024
+            || (info.len > 0 && !info.sourceBuf)))
+        { save->f = nullptr; return; }
+    }
+
     // Was a bool* walked in 44-byte steps (sizeof(SourceBufferInfo) in the 32-bit build). With
     // 64-bit pointers in that struct the stride is wrong, so the count written here disagreed
     // with the entries written below - and the loader then read garbage lengths.
@@ -781,100 +792,72 @@ void __cdecl Scr_SaveSourceImmediate(SaveImmediate *save)
     }
 }
 
+// Bound all counts/lengths before allocating or consuming archived script data.
+// A truncated save must produce a load error instead of using uninitialized
+// lengths or allocating arbitrary amounts of memory.
+static constexpr int MAX_SAVE_SOURCE_BUFFERS = 65536;
+static constexpr int MAX_SAVE_SOURCE_BYTES = 16 * 1024 * 1024;
+static void Scr_BadSaveSource(void *fileHandle)
+{
+    scrParserGlob.saveSourceBufferLookupLen = 0;
+    scrParserGlob.saveSourceBufferLookup = nullptr;
+    if (fileHandle) CloseDevice(fileHandle);
+    Com_Error(ERR_DROP, "Corrupt or truncated savegame script source archive");
+}
+
 void __cdecl Scr_LoadSource(MemoryFile *memFile, void *fileHandle)
 {
-    SaveSourceBufferInfo *saveSourceBufferLookup; // r3
-    signed int v5; // r25
-    int v6; // r27
-    SaveSourceBufferInfo *v7; // r31
-    int *p_len; // r30
-    int len; // r3
-    char *v10; // r3
-    int v11; // r4
-    char v12; // [sp+50h] [-50h] BYREF
-
-    if (scrParserGlob.saveSourceBufferLookup)
-        MyAssertHandler(
-            "c:\\trees\\cod3\\cod3src\\src\\script\\scr_readwrite.cpp",
-            1236,
-            0,
-            "%s",
-            "!scrParserGlob.saveSourceBufferLookup");
-    MemFile_ReadData(memFile, 1, (unsigned char*)&v12);
-    MemFile_ReadData(memFile, 1, (unsigned char*)&scrVarPub.developer_script);
-    if (v12)
+    unsigned char developer = 0;
+    MemFile_ReadData(memFile, 1, &developer);
+    MemFile_ReadData(memFile, 1, (unsigned char *)&scrVarPub.developer_script);
+    if (!developer) return;
+    int count = 0;
+    if (ReadFromDevice(&count, sizeof(count), fileHandle) != sizeof(count)
+        || count < 0 || count > MAX_SAVE_SOURCE_BUFFERS || count > SaveDevice_RemainingBytes(fileHandle) / 4)
+    { Scr_BadSaveSource(fileHandle); return; }
+    if (!count) return;
+    iassert(!scrParserGlob.saveSourceBufferLookup);
+    auto *lookup = static_cast<SaveSourceBufferInfo *>(Hunk_AllocDebugMem(sizeof(SaveSourceBufferInfo) * count, "Scr_LoadSource"));
+    memset(lookup, 0, sizeof(SaveSourceBufferInfo) * count);
+    scrParserGlob.saveSourceBufferLookup = lookup;
+    scrParserGlob.saveSourceBufferLookupLen = count;
+    // The parser consumes the archived entries from the end of this array.
+    for (int i = count - 1; i >= 0; --i)
     {
-        const int bytesRead = ReadFromDevice(
-            &scrParserGlob.saveSourceBufferLookupLen, 4, fileHandle);
-        if (bytesRead != 4 || scrParserGlob.saveSourceBufferLookupLen == 0)
+        int length = 0;
+        if (ReadFromDevice(&length, sizeof(length), fileHandle) != sizeof(length)
+            || length < -1 || length > MAX_SAVE_SOURCE_BYTES || length > SaveDevice_RemainingBytes(fileHandle))
+        { Scr_BadSaveSource(fileHandle); return; }
+        lookup[i].len = length;
+        if (length > 0)
         {
-            scrParserGlob.saveSourceBufferLookupLen = 0;
-            scrParserGlob.saveSourceBufferLookup = 0;
-            return;
-        }
-        // sizeof, not 8: SaveSourceBufferInfo holds a pointer, so the entries are wider than the
-        // 32-bit original. Allocating the old size overran the array and fed garbage lengths back.
-        saveSourceBufferLookup = (SaveSourceBufferInfo *)Hunk_AllocDebugMem(
-            sizeof(SaveSourceBufferInfo) * scrParserGlob.saveSourceBufferLookupLen,
-            "Scr_LoadSource");
-        scrParserGlob.saveSourceBufferLookup = saveSourceBufferLookup;
-        v5 = scrParserGlob.saveSourceBufferLookupLen - 1;
-        if ((signed int)(scrParserGlob.saveSourceBufferLookupLen - 1) >= 0)
-        {
-            v6 = v5;
-            while (1)
-            {
-                v7 = &saveSourceBufferLookup[v6];
-                p_len = &saveSourceBufferLookup[v6].len;
-                ReadFromDevice(p_len, 4, fileHandle);
-                len = v7->len;
-                if (len <= 0)
-                {
-                    v7->sourceBuf = 0;
-                }
-                else
-                {
-                    v10 = (char *)Hunk_AllocDebugMem(len, "Scr_LoadSource");
-                    v11 = *p_len;
-                    v7->sourceBuf = v10;
-                    ReadFromDevice(v10, v11, fileHandle);
-                }
-                --v5;
-                --v6;
-                if (v5 < 0)
-                    break;
-                saveSourceBufferLookup = scrParserGlob.saveSourceBufferLookup;
-            }
+            lookup[i].sourceBuf = static_cast<char *>(Hunk_AllocDebugMem(length, "Scr_LoadSource"));
+            if (ReadFromDevice(lookup[i].sourceBuf, length, fileHandle) != length)
+            { Scr_BadSaveSource(fileHandle); return; }
         }
     }
 }
 
 void __cdecl Scr_SkipSource(MemoryFile *memFile, void *fileHandle)
 {
-    int i; // r30
-    _BYTE v5[4]; // [sp+50h] [-30h] BYREF
-    int v6; // [sp+54h] [-2Ch] BYREF
-    int v7[4]; // [sp+58h] [-28h] BYREF
-
-    MemFile_ReadData(memFile, 1, v5);
-    MemFile_ReadData(memFile, 1, (unsigned char*)&scrVarPub.developer_script);
-    if (v5[0])
+    unsigned char developer = 0;
+    MemFile_ReadData(memFile, 1, &developer);
+    MemFile_ReadData(memFile, 1, (unsigned char *)&scrVarPub.developer_script);
+    if (!developer || !fileHandle) return;
+    int count = 0;
+    if (ReadFromDevice(&count, sizeof(count), fileHandle) != sizeof(count)
+        || count < 0 || count > MAX_SAVE_SOURCE_BUFFERS || count > SaveDevice_RemainingBytes(fileHandle) / 4)
+    { Scr_BadSaveSource(fileHandle); return; }
+    for (int i = 0; i < count; ++i)
     {
-        if (fileHandle)
-        {
-            v6 = 0;
-            const int bytesRead = ReadFromDevice(&v6, 4, fileHandle);
-            if (bytesRead != 4 || v6 <= 0)
-                return;
-            for (i = v6 - 1; i >= 0; --i)
-            {
-                ReadFromDevice(v7, 4, fileHandle);
-                if (v7[0] > 0)
-                    ReadFromDevice(0, v7[0], fileHandle);
-            }
-        }
+        int length = 0;
+        if (ReadFromDevice(&length, sizeof(length), fileHandle) != sizeof(length)
+            || length < -1 || length > MAX_SAVE_SOURCE_BYTES || length > SaveDevice_RemainingBytes(fileHandle)
+            || (length > 0 && ReadFromDevice(nullptr, length, fileHandle) != length))
+        { Scr_BadSaveSource(fileHandle); return; }
     }
 }
+
 
 void __cdecl AddSaveStackInternal(const VariableStackBuffer *stackBuf)
 {

@@ -19,5 +19,16 @@ int main() {
     assert(!kisak::save::VerifyAndCommit(temp.c_str(),dest.c_str(),header.data(),header.size(),body.data(),body.size(),header.size()+body.size()+tail.size()));
     assert(read(dest)=="old checkpoint");write(temp,header+body+tail);
     assert(kisak::save::VerifyAndCommit(temp.c_str(),dest.c_str(),header.data(),header.size(),body.data(),body.size(),header.size()+body.size()+tail.size()));
-    assert(read(dest)==header+body+tail && !std::filesystem::exists(temp));std::filesystem::remove_all(dir);
+    assert(read(dest)==header+body+tail && !std::filesystem::exists(temp));
+    assert(read(dest+".bak")=="old checkpoint");
+    // Every mission uses the same writer. A bad replacement cannot destroy
+    // either generation; the next successful one rotates the full old save.
+    write(temp,header+body+tail);
+    assert(!kisak::save::VerifyAndCommit(dest.c_str(),dest.c_str(),header.data(),header.size(),body.data(),body.size(),header.size()+body.size()+tail.size()));
+    assert(!kisak::save::VerifyAndCommit(temp.c_str(),dest.c_str(),nullptr,header.size(),body.data(),body.size(),header.size()+body.size()+tail.size()));
+    const std::string nextBody(50000,'z');write(temp,header+nextBody+tail);
+    assert(kisak::save::VerifyAndCommit(temp.c_str(),dest.c_str(),header.data(),header.size(),nextBody.data(),nextBody.size(),header.size()+nextBody.size()+tail.size()));
+    assert(read(dest+".bak")==header+body+tail);
+    assert(read(dest)==header+nextBody+tail);
+    std::filesystem::remove_all(dir);
 }

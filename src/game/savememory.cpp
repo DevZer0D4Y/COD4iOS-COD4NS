@@ -628,7 +628,9 @@ int __cdecl SaveMemory_CommitSave(SaveGame *save, int saveId)
         saveMemoryGlob.committedGameSave->saveState = COMMITTED;
         if (save == (SaveGame *)-1024)
             MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\savememory.cpp", 846, 0, "%s", "save->header.filename");
-        SV_SetLastSaveName(save->header.filename);
+        // The archived resume path must only name a checkpoint actually on disk.
+        if (save->isWrittenToDevice)
+            SV_SetLastSaveName(save->header.filename);
         if (!save->suppressPlayerNotify)
             SV_GameSendServerCommand(-1, "reachedcheckpoint");
         return 1;
@@ -696,13 +698,15 @@ int __cdecl SaveMemory_WriteSaveToDevice(SaveGame *save)
 			if (!SV_IsInternalSave(save->header.filename))
 				SV_SetLastSaveName(save->header.filename);
 		}
-        SaveMemory_FinalizeSaveCommit(save);
+        // Retain AWAITING_COMMIT on failure so the checkpoint can be retried.
+        if (!writeResult)
+            SaveMemory_FinalizeSaveCommit(save);
         return writeResult;
     }
     else
     {
         Com_Printf(CON_CHANNEL_FILES, "Attempting to write an invalid save buffer\n");
-        return 0;
+        return -1;
     }
 }
 
