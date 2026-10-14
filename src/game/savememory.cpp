@@ -626,12 +626,28 @@ int __cdecl SaveMemory_CommitSave(SaveGame *save, int saveId)
         saveMemoryGlob.committedGameSave = saveMemoryGlob.currentGameSave;
         saveMemoryGlob.currentGameSave = committedGameSave;
         saveMemoryGlob.committedGameSave->saveState = COMMITTED;
+#if defined(__APPLE__) && !defined(KISAK_NATIVE_PORT)
+        // Retail checkpoints use commit level 2 (and deferred commits use 1).
+        // Those bits only swap the RAM buffers; iOS has no platform save task
+        // to persist them later. Write the accepted checkpoint now, before
+        // announcing it, so a process crash cannot lose all autosave progress.
+        if (!save->header.internalSave && !save->header.demoPlayback
+            && !SV_IsInternalSave(save->header.filename) && !save->isWrittenToDevice)
+        {
+            if (SaveMemory_WriteSaveToDevice(save))
+                SV_DisplaySaveErrorUI();
+        }
+#endif
         if (save == (SaveGame *)-1024)
             MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\savememory.cpp", 846, 0, "%s", "save->header.filename");
         // The archived resume path must only name a checkpoint actually on disk.
         if (save->isWrittenToDevice)
             SV_SetLastSaveName(save->header.filename);
-        if (!save->suppressPlayerNotify)
+        if (!save->suppressPlayerNotify
+#if defined(__APPLE__) && !defined(KISAK_NATIVE_PORT)
+            && (save->header.internalSave || save->isWrittenToDevice)
+#endif
+        )
             SV_GameSendServerCommand(-1, "reachedcheckpoint");
         return 1;
     }

@@ -12,6 +12,17 @@ if(BUILD_TESTING AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     target_compile_options(kisakcod_touch_layout_tests PRIVATE -UNDEBUG)
     add_test(NAME touch_layout_geometry COMMAND kisakcod_touch_layout_tests)
     add_test(NAME campaign_transitions COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/engine/tests/CampaignTransitionTests.py)
+    add_executable(kisakcod_resume_tests engine/tests/SaveResumeTests.cpp)
+    target_compile_features(kisakcod_resume_tests PRIVATE cxx_std_17)
+    target_compile_options(kisakcod_resume_tests PRIVATE -UNDEBUG)
+    add_test(NAME campaign_resume_recovery COMMAND kisakcod_resume_tests)
+    if(APPLE)
+        add_test(NAME campaign_checkpoint_commit COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/engine/tests/CheckpointCommitTests.py)
+        add_executable(kisakcod_save_diagnostics_tests engine/tests/SaveDiagnosticsTests.cpp)
+        target_compile_features(kisakcod_save_diagnostics_tests PRIVATE cxx_std_17)
+        target_compile_options(kisakcod_save_diagnostics_tests PRIVATE -UNDEBUG)
+        add_test(NAME campaign_crash_diagnostics COMMAND kisakcod_save_diagnostics_tests)
+    endif()
 endif()
 if(APPLE)
     add_subdirectory(platform)
@@ -137,7 +148,7 @@ if(KISAK_BUILD_ENGINE AND KISAK_BUILD_MP AND KISAK_BUILD_COMBINED)
         MACOSX_BUNDLE_GUI_IDENTIFIER "${KISAK_COMBINED_BUNDLE_ID}"
         MACOSX_BUNDLE_BUNDLE_NAME "COD4iOS"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0.4"
-        MACOSX_BUNDLE_BUNDLE_VERSION "7"
+        MACOSX_BUNDLE_BUNDLE_VERSION "8"
         XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${KISAK_COMBINED_BUNDLE_ID}"
         XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
         XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME "AppIcon"

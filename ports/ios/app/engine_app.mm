@@ -14,6 +14,7 @@
 #include "../engine/controller_input.h"
 #import "touch_controls.h"
 #include "../save/SaveRecovery.h"
+#include "../save/SaveDiagnostics.h"
 #import "client_patch.h"
 
 // Com_Printf, so controller diagnostics land in the console log (stderr is not captured here).
@@ -373,6 +374,11 @@ static void *KISEngineThreadMain(void *argument)
     }
 #endif
     _started = YES;
+#ifdef KISAK_MP
+    kisak::savefile::diagnostics::Begin(root.fileSystemRepresentation,"mp");
+#else
+    kisak::savefile::diagnostics::Begin(root.fileSystemRepresentation,"sp");
+#endif
     kisak::savefile::PrepareDirectory(std::string(root.fileSystemRepresentation)+"/players");
     CGFloat scale = self.view.window.screen.nativeScale;
 #if TARGET_OS_SIMULATOR

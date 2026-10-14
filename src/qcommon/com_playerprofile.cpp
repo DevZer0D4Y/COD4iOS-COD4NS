@@ -9,6 +9,9 @@
 #include <win32/win_storage.h>
 #include <win32/win_local.h>
 #include <win32/win_localize.h>
+#if defined(KISAK_SP) && defined(__APPLE__) && !defined(KISAK_NATIVE_PORT)
+#include <game/savedevice.h>
+#endif
 
 const dvar_t *ui_playerProfileAlreadyChosen;
 const dvar_t *com_playerProfile;
@@ -134,6 +137,9 @@ void __cdecl Com_SetPlayerProfile(int localClientNum, char *profileName)
     Com_BuildPlayerProfilePath(configFile, 64, "config.cfg");
 #endif
     Com_ExecStartupConfigs(localClientNum, configFile);
+#if defined(KISAK_SP) && defined(__APPLE__) && !defined(KISAK_NATIVE_PORT)
+    SaveDevice_RestoreResume();
+#endif
     name = Dvar_GetVariantString("name");
     if (!name || !*name)
         Dvar_SetStringByName("name", profileName);

@@ -8,6 +8,8 @@
 #include <unordered_map>
 #if (defined(__APPLE__) || defined(KISAK_NATIVE_PORT))
 #include "../../ports/ios/save/NativeSaveFile.h"
+#include "../../ports/ios/save/SaveResume.h"
+#include "../../ports/ios/save/SaveDiagnostics.h"
 #endif
 #include <qcommon/qcommon.h>
 #include <universal/com_files.h>
@@ -51,6 +53,22 @@ void __cdecl Memcard_InitializeSystem(void)
 void __cdecl SaveDevice_Init(void)
 {
 	g_saveDevice_lastSaveSucceeded = true;
+}
+
+void __cdecl SaveDevice_RestoreResume(void)
+{
+#if defined(__APPLE__) && !defined(KISAK_NATIVE_PORT)
+    if (!sv_lastSaveGame || !com_playerProfile || !com_playerProfile->current.string[0]) return;
+    char players[260];
+    FS_BuildOSPath(fs_homepath->current.string, "players", "", players);
+    const std::string restored = kisak::savefile::ResolveResume(players,
+        com_playerProfile->current.string, sv_lastSaveGame->current.string);
+    if (!restored.empty() && restored != sv_lastSaveGame->current.string)
+    {
+        Dvar_SetString(sv_lastSaveGame, restored.c_str());
+        Com_Printf(CON_CHANNEL_FILES, "Recovered durable Resume checkpoint: %s\n", restored.c_str());
+    }
+#endif
 }
 
 void __cdecl SV_DisplaySaveErrorUI(void)
@@ -232,6 +250,18 @@ static bool SaveExistsValidated(char const *path)
 	if (!path || !*path)
 		return false;
 
+#if defined(__APPLE__) && !defined(KISAK_NATIVE_PORT)
+    // UI availability checks must recover a missing primary too; otherwise
+    // Resume is hidden before OpenDevice ever gets a chance to restore it.
+    if (strstr(path, "/save/") && !strstr(path, "..") && path[0] != '/')
+    {
+        char physical[260];
+        const char *relative = !strncmp(path, "players/", 8) ? path + 8 : path;
+        FS_BuildOSPath(fs_homepath->current.string, "players", relative, physical);
+        if (!kisak::savefile::Complete(physical)) kisak::savefile::Recover(physical);
+    }
+#endif
+
 	FS_FOpenFileRead(path, &handle);
 	if (!handle)
 		return false;
@@ -268,6 +298,9 @@ bool __cdecl SaveExists(char const *savename)
 
 int __cdecl WriteSaveToDevice(unsigned char *data, struct SaveHeader const *saveHeader, bool /*suppressPlayerNotify*/)
 {
+#if defined(__APPLE__) && !defined(KISAK_NATIVE_PORT)
+    kisak::savefile::diagnostics::Stage("checkpoint disk write begin",saveHeader?saveHeader->mapName:"",saveHeader?saveHeader->filename:"");
+#endif
 	if (!data || !saveHeader || saveHeader->bodySize <= 0
         || saveHeader->bodySize > 1572864 || saveHeader->saveVersion != 287)
 	{
@@ -335,6 +368,16 @@ int __cdecl WriteSaveToDevice(unsigned char *data, struct SaveHeader const *save
         return -1;
     }
     g_saveDevice_lastSaveSucceeded = true;
+#if defined(__APPLE__) && !defined(KISAK_NATIVE_PORT)
+    kisak::savefile::diagnostics::Stage("checkpoint disk commit complete",saveHeader->mapName,saveHeader->filename);
+    if (!saveHeader->internalSave && !saveHeader->demoPlayback && com_playerProfile)
+    {
+        char players[260];
+        FS_BuildOSPath(fs_homepath->current.string, "players", "", players);
+        if (!kisak::savefile::RecordResume(players, com_playerProfile->current.string, saveHeader->filename))
+            Com_PrintWarning(CON_CHANNEL_FILES, "Checkpoint is durable, but its Resume marker could not be saved.\n");
+    }
+#endif
 #else
 	FS_Rename((char*)"save/temp.svg", fs_gamedir,
 		(char*)saveHeader->filename, (char*)"players");

@@ -32,6 +32,12 @@
 #include "g_vehicle_path.h"
 #include <xanim/xanim_readwrite.h>
 #include "savedevice.h"
+#if defined(__APPLE__) && !defined(KISAK_NATIVE_PORT)
+#include "../../ports/ios/save/SaveDiagnostics.h"
+#define SAVE_STAGE(stage) kisak::savefile::diagnostics::Stage(stage, Dvar_GetString("mapname"))
+#else
+#define SAVE_STAGE(stage) ((void)0)
+#endif
 
 bool g_useDevSaveArea;
 
@@ -1946,6 +1952,7 @@ void __cdecl G_SaveMainState(bool savegame, SaveGame *save)
     Sentient_WriteGlob(save);
     AimTarget_WriteSaveGame(save);
     Scr_SavePre(1);
+    SAVE_STAGE("script save preparation complete");
 
     //ProfMem_End(v15);
     //ProfMem_Begin("path nodes", v17);
@@ -1953,6 +1960,7 @@ void __cdecl G_SaveMainState(bool savegame, SaveGame *save)
     SaveMemory_StartSegment(save, 3);
     Path_ValidateAllNodes();
     WritePathNodes(save);
+    SAVE_STAGE("path nodes saved");
 
     //ProfMem_End(v19);
     //ProfMem_Begin("entities", v21);
@@ -1978,6 +1986,7 @@ void __cdecl G_SaveMainState(bool savegame, SaveGame *save)
     v27 = MemFile_GetUsedSize(SaveMemory_GetMemoryFile(save));
     //ProfMem_Begin("misc: clients, actors, vehicles", v27);
     WriteBadPlaces(save);
+    SAVE_STAGE("entities saved");
     v28 = 0;
     i = 0;
     do
@@ -2008,6 +2017,7 @@ void __cdecl G_SaveMainState(bool savegame, SaveGame *save)
     }
 
     G_SaveVehicleInfo(save);
+    SAVE_STAGE("actors, sentients and vehicles saved");
 
     for (i = 0; i < 32; ++i)
     {
@@ -2045,6 +2055,7 @@ void __cdecl G_SaveMainState(bool savegame, SaveGame *save)
     //ProfMem_Begin("Script", v38);
     SaveMemory_StartSegment(save, 4);
     Scr_SavePost(SaveMemory_GetMemoryFile(save));
+    SAVE_STAGE("script objects saved");
     //ProfMem_End(v40);
     //ProfMem_Begin("Animtree", v42);
     SaveMemory_StartSegment(save, 5);
@@ -2076,6 +2087,7 @@ void __cdecl G_SaveMainState(bool savegame, SaveGame *save)
     } while (v43 < MAX_GENTITIES);
     //ProfMem_End(v49);
     Scr_SaveShutdown(savegame);
+    SAVE_STAGE("animation trees saved");
     G_CheckAllEntities();
     SV_BeginSaveGame();
     //ProfMem_Begin("client", v51);
@@ -2088,6 +2100,7 @@ void __cdecl G_SaveMainState(bool savegame, SaveGame *save)
     CG_SaveViewModelAnimTrees(save);
     Phys_ArchiveState(SaveMemory_GetMemoryFile(save));
     SV_EndSaveGame();
+    SAVE_STAGE("client and physics state saved");
     //ProfMem_End(v57);
     //ProfMem_End(v59);
 }
@@ -2133,6 +2146,9 @@ int __cdecl G_WriteGame(const PendingSave *pendingSave, int checksum, SaveGame *
     if (pendingSave == (const PendingSave *)-320)
         MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_save.cpp", 2434, 0, "%s", "pendingSave->screenShotName");
     Com_Printf(CON_CHANNEL_FILES, "G_WriteGame '%s' '%s'\n", pendingSave->filename, pendingSave->description);
+#if defined(__APPLE__) && !defined(KISAK_NATIVE_PORT)
+    kisak::savefile::diagnostics::Stage("checkpoint serialization begin", Dvar_GetString("mapname"),pendingSave->filename);
+#endif
     if (!save)
         MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\g_save.cpp", 2438, 0, "%s", "save");
     SaveMemory_InitializeGameSave(save);
@@ -2217,7 +2233,7 @@ int __cdecl G_ProcessCommitActions(const PendingSave *pendingSave, SaveGame *sav
     v4 = 0;
     if ((pendingSave->commitLevel & 2) != 0)
         SaveMemory_ForceCommitSave(save);
-    if ((pendingSave->commitLevel & 4) != 0)
+    if ((pendingSave->commitLevel & 4) != 0 && !SaveMemory_IsWrittenToDevice(save))
     {
         //if (pendingSave->saveType != SAVE_TYPE_AUTOSAVE)
         //    MemCard_SetUseDevDrive(1);
