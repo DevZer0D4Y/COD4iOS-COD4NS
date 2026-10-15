@@ -137,6 +137,11 @@ void CG_Vehicle_DoControllers(const cpose_t *pose, const DObj_s *obj, int *partB
     float wheelOffset[3];
 
     iassert(obj);
+    const XModel *model = DObjGetModel(obj, 0);
+    if (!model) return;
+    const unsigned int boneCount = XModelNumBones(model);
+    const DObjAnimMat *basePose = XModelGetBasePose(model);
+    if (!basePose) return;
 
     bodyAngles[0]   = (float)pose->vehicle.pitch       * SHORT2ANGLE;
     bodyAngles[1]   = 0.0f;
@@ -161,14 +166,11 @@ void CG_Vehicle_DoControllers(const cpose_t *pose, const DObj_s *obj, int *partB
 
     AnglesToAxis(pose->angles, axis);
 
-    const XModel *model = DObjGetModel(obj, 0);
-    XModelNumBones(model);
-    const DObjAnimMat *basePose = XModelGetBasePose(model);
-
     for (int i = 0; i < 6; ++i)
     {
         unsigned int boneIndex = pose->vehicle.wheelBoneIndex[i];
-        if (boneIndex < 0xFEu && DObjSetRotTransIndex((DObj_s *)obj, partBits, boneIndex))
+        if (boneIndex < 0xFEu && boneIndex < boneCount
+            && DObjSetRotTransIndex((DObj_s *)obj, partBits, boneIndex))
         {
             const float *baseTrans = basePose[boneIndex].trans;
             const float lx = baseTrans[0];

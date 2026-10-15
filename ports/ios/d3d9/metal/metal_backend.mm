@@ -16,6 +16,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include "ShaderConstantCache.h"
 #include <unordered_set>
 #include <vector>
 
@@ -438,7 +439,7 @@ uint32_t LevelSize(uint32_t size, uint32_t level) { return std::max<uint32_t>(si
 // Context
 
 constexpr uint32_t kDefaultAttributeBuffer = 27;
-constexpr size_t kFrameArenaSize = 16 * 1024 * 1024;
+constexpr size_t kFrameArenaSize = 4 * 1024 * 1024;
 constexpr int kInflightFrames = 3;
 
 struct Allocation
@@ -472,6 +473,11 @@ public:
             frame.used = 0;
         }
         id<MTLBuffer> buffer = [device newBufferWithLength:std::max(size, kFrameArenaSize) options:MTLResourceStorageModeShared];
+        if (!buffer || !buffer.contents)
+        {
+            LogOnce("frame arena allocation failed; draw skipped");
+            return {};
+        }
         frame.buffers.push_back(buffer);
         frame.used = size;
         return Allocation{buffer, 0, buffer.contents};
@@ -479,6 +485,11 @@ public:
 
     void NextFrame()
     {
+        // Release old peak-scene capacity after lighter frames, keeping one
+        // spare chunk. Encoded command buffers retain any buffers still in use.
+        auto &usedFrame=m_frames[m_frame];
+        if(usedFrame.buffers.size()>usedFrame.current+2)
+            usedFrame.buffers.resize(usedFrame.current+2);
         m_frame = (m_frame + 1) % kInflightFrames;
         m_frames[m_frame].current = 0;
         m_frames[m_frame].used = 0;
@@ -524,6 +535,7 @@ struct Context
     std::unordered_map<uint64_t, id<MTLDepthStencilState>> depthStates;
     std::unordered_map<uint64_t, id<MTLSamplerState>> samplers;
     FrameArena arena;
+    ShaderConstantCache<Allocation> vertexConstants,pixelConstants;
     std::recursive_mutex lock;
 };
 
@@ -556,6 +568,7 @@ id<MTLCommandBuffer> CommandBuffer()
     {
         dispatch_semaphore_wait(g->inflight, DISPATCH_TIME_FOREVER);
         g->commandBuffer = [g->queue commandBuffer];
+        if(!g->commandBuffer){dispatch_semaphore_signal(g->inflight);return nil;}
         dispatch_semaphore_t inflight = g->inflight;
         [g->commandBuffer addCompletedHandler:^(id<MTLCommandBuffer>) {
           dispatch_semaphore_signal(inflight);
@@ -1069,15 +1082,15 @@ bool PrepareDraw(const DrawState &state)
     [encoder setVertexBuffer:g->defaultAttributes offset:0 atIndex:kDefaultAttributeBuffer];
 
     const uint32_t vsConstants = std::max<uint32_t>(vs->base.constantCount, 1);
-    Allocation vc = g->arena.Allocate(g->device, vsConstants * 16);
-    if (state.vertexConstants)
-        memcpy(vc.pointer, state.vertexConstants, std::min<uint32_t>(vsConstants, 256) * 16);
+    Allocation vc = g->vertexConstants.Upload(state.vertexConstants,vsConstants*16,256*16,
+        [](size_t size){return g->arena.Allocate(g->device,size);});
+    if(!vc.pointer)return false;
     [encoder setVertexBuffer:vc.buffer offset:vc.offset atIndex:kVertexConstantBuffer];
 
     const uint32_t psConstants = std::max<uint32_t>(ps->base.constantCount, 1);
-    Allocation pc = g->arena.Allocate(g->device, psConstants * 16);
-    if (state.pixelConstants)
-        memcpy(pc.pointer, state.pixelConstants, std::min<uint32_t>(psConstants, 224) * 16);
+    Allocation pc = g->pixelConstants.Upload(state.pixelConstants,psConstants*16,224*16,
+        [](size_t size){return g->arena.Allocate(g->device,size);});
+    if(!pc.pointer)return false;
     [encoder setFragmentBuffer:pc.buffer offset:pc.offset atIndex:kFragmentConstantBuffer];
 
     VertexParams vertexParams;
@@ -1303,6 +1316,7 @@ Buffer *CreateBuffer(size_t length)
         return nullptr;
     auto *buffer = new Buffer();
     buffer->buffer = [g->device newBufferWithLength:length options:MTLResourceStorageModeShared];
+    if(!buffer->buffer){delete buffer;return nullptr;}
     buffer->length = length;
     return buffer;
 }
@@ -1370,6 +1384,10 @@ void DestroyShader(Shader *shader)
         return;
     }
     std::lock_guard<std::recursive_mutex> guard(g->lock);
+    // Pipeline keys contain shader addresses. Keeping entries after deletion
+    // leaks old-map states and can select the wrong pipeline if an address is
+    // reused by a shader from the next map.
+    g->pipelines.clear();g->failedPipelines.clear();
     delete shader;
 }
 
@@ -1384,6 +1402,12 @@ VertexLayout *CreateVertexLayout(const VertexElement *elements, size_t count)
 
 void DestroyVertexLayout(VertexLayout *layout)
 {
+    if(!layout)return;
+    if(g){
+        std::lock_guard<std::recursive_mutex> guard(g->lock);
+        g->pipelines.clear();g->failedPipelines.clear();
+        delete layout;return;
+    }
     delete layout;
 }
 
@@ -1445,8 +1469,12 @@ void DrawUserPrimitives(const DrawState &state, Primitive primitive, uint32_t pr
     std::lock_guard<std::recursive_mutex> guard(g->lock);
     @autoreleasepool
     {
+        // Acquire the frame slot before writing UP vertices. PrepareDraw does
+        // this for regular draws, but runs after this allocation for UP draws.
+        if(!CommandBuffer())return;
         const uint32_t count = VertexCount(primitive, primitiveCount);
         Allocation data = g->arena.Allocate(g->device, static_cast<size_t>(count) * stride);
+        if(!data.pointer)return;
         memcpy(data.pointer, vertices, static_cast<size_t>(count) * stride);
         Buffer temporary;
         temporary.buffer = data.buffer;
@@ -1550,6 +1578,7 @@ void Present(const TargetBinding &backBuffer)
         }
         [commandBuffer commit];
         g->commandBuffer = nil;
+        g->vertexConstants.Reset();g->pixelConstants.Reset();
         g->arena.NextFrame();
     }
 }

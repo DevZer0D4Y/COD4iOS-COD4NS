@@ -11,6 +11,7 @@
 #include <win32/win_localize.h>
 #if defined(KISAK_SP) && defined(__APPLE__) && !defined(KISAK_NATIVE_PORT)
 #include <game/savedevice.h>
+#include <ui/mission.h>
 #endif
 
 const dvar_t *ui_playerProfileAlreadyChosen;
@@ -131,6 +132,9 @@ void __cdecl Com_SetPlayerProfile(int localClientNum, char *profileName)
     iassert( profileName[0] );
     iassert( com_playerProfile );
     Dvar_SetString((dvar_s *)com_playerProfile, profileName);
+#if defined(KISAK_SP) && defined(__APPLE__) && !defined(KISAK_NATIVE_PORT)
+    Campaign_BeginProfile();
+#endif
 #ifdef KISAK_MP
     Com_BuildPlayerProfilePath(configFile, 64, "config_mp.cfg");
 #elif KISAK_SP
@@ -139,6 +143,7 @@ void __cdecl Com_SetPlayerProfile(int localClientNum, char *profileName)
     Com_ExecStartupConfigs(localClientNum, configFile);
 #if defined(KISAK_SP) && defined(__APPLE__) && !defined(KISAK_NATIVE_PORT)
     SaveDevice_RestoreResume();
+    Campaign_RestoreProgress();
 #endif
     name = Dvar_GetVariantString("name");
     if (!name || !*name)

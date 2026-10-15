@@ -4,6 +4,7 @@
 
 #include <universal/q_shared.h>
 #include <cmath>
+#include <ui/mission.h>
 #include <script/scr_animtree.h>
 
 #include "g_scr_main.h"
@@ -7059,71 +7060,39 @@ void GScr_MissionFailed()
 
 void __cdecl GScr_SetMissionDvar()
 {
-    const char *String; // r31
-    const char **v1; // r29
-    const char *v2; // r10
-    const char *v3; // r11
-    int v4; // r8
-    const dvar_s *Var; // r30
-    const char *v6; // r3
-    int type; // r5
-    const char *v8; // r3
-    const char *v9; // r3
-    int Int; // r3
-    const char *VariantString; // r3
-    const char *v12; // r3
-    const char *v13; // r3
-
-    String = Scr_GetString(0);
-    v1 = missionDvarList;
-    if (!missionDvarList[0])
+    if (Scr_GetNumParam() != 2)
     {
-    LABEL_12:
-        v9 = va("Invalid mission dvar name: %s\n", String);
-        Scr_Error(v9);
+        Scr_Error("setmissiondvar requires a name and value");
         return;
     }
-    while (1)
+    const char *name = Scr_GetString(0);
+    bool allowed = false;
+    for (const char **entry = missionDvarList; *entry; ++entry)
+        if (!strcmp(name, *entry)) { allowed = true; break; }
+    if (!allowed)
     {
-        v2 = *v1;
-        v3 = String;
-        do
-        {
-            v4 = *(unsigned __int8 *)v3 - *(unsigned __int8 *)v2;
-            if (!*v3)
-                break;
-            ++v3;
-            ++v2;
-        } while (!v4);
-        if (!v4)
-            goto LABEL_11;
-        Var = Dvar_FindVar(String);
-        if (!Var)
-        {
-            v6 = va("Mission dvar has valid name, but was not found: %s\n", String);
-            Scr_Error(v6);
-        }
-        type = Var->type;
-        if (type == 5)
-        {
-            Int = Scr_GetInt(1);
-            Dvar_SetIntByName(String, Int);
-            VariantString = Dvar_GetVariantString(String);
-            Com_Printf(CON_CHANNEL_SYSTEM, " * SetMissionDvar(): \"%s\" set to \"%s\".\n", String, VariantString);
-            return;
-        }
-        if (type == 7)
-            break;
-        v8 = va("Mission dvar has valid name, but invalid type: %s is of type %i\n", String, type);
-        Scr_Error(v8);
-    LABEL_11:
-        if (!*++v1)
-            goto LABEL_12;
+        Scr_Error(va("Invalid mission dvar name: %s", name));
+        return;
     }
-    v12 = Scr_GetString(1);
-    Dvar_SetStringByName(String, v12);
-    v13 = Dvar_GetVariantString(String);
-    Com_Printf(CON_CHANNEL_SYSTEM, " * SetMissionDvar(): \"%s\" set to \"%s\".\n", String, v13);
+    const dvar_s *var = Dvar_FindVar(name);
+    if (!var)
+    {
+        Scr_Error(va("Mission dvar has valid name, but was not found: %s", name));
+        return;
+    }
+    if (var->type == 5)
+        Dvar_SetIntByName(name, Scr_GetInt(1));
+    else if (var->type == 7)
+        Dvar_SetStringByName(name, Scr_GetString(1));
+    else
+    {
+        Scr_Error(va("Mission dvar has invalid type: %s (%i)", name, var->type));
+        return;
+    }
+    Com_Printf(CON_CHANNEL_SYSTEM, " * SetMissionDvar(): %s = %s\n", name, Dvar_GetVariantString(name));
+#if defined(__APPLE__) && !defined(KISAK_NATIVE_PORT)
+    Campaign_SaveProgress();
+#endif
 }
 
 void GScr_Cinematic()
@@ -10522,7 +10491,11 @@ void ScrCmd_GiveAchievement()
 
 void ScrCmd_UpdateGamerProfile()
 {
-    Cbuf_AddText(0, "updategamerprofile");
+#if defined(__APPLE__) && !defined(KISAK_NATIVE_PORT)
+    Campaign_SaveProgress();
+#else
+    Cbuf_AddText(0, "updategamerprofile\n");
+#endif
 }
 
 void GScr_SetMiniMap()
