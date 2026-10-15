@@ -12,6 +12,8 @@ if(BUILD_TESTING AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     target_compile_options(kisakcod_touch_layout_tests PRIVATE -UNDEBUG)
     add_test(NAME touch_layout_geometry COMMAND kisakcod_touch_layout_tests)
     add_test(NAME campaign_transitions COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/engine/tests/CampaignTransitionTests.py)
+    add_test(NAME dynamic_light_surfaces COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/engine/tests/DynamicLightSurfacesTests.py)
+    add_test(NAME static_model_streams COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/engine/tests/StaticModelStreamTests.py)
     add_test(NAME campaign_vehicle_pose COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/engine/tests/CampaignVehiclePoseTests.py)
     add_test(NAME metal_pipeline_lifetime COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/engine/tests/MetalPipelineLifetimeTests.py)
     add_executable(kisakcod_metal_constants_tests engine/tests/MetalConstantCacheTests.cpp)
@@ -161,7 +163,7 @@ if(KISAK_BUILD_ENGINE AND KISAK_BUILD_MP AND KISAK_BUILD_COMBINED)
         MACOSX_BUNDLE_GUI_IDENTIFIER "${KISAK_COMBINED_BUNDLE_ID}"
         MACOSX_BUNDLE_BUNDLE_NAME "COD4iOS"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0.4"
-        MACOSX_BUNDLE_BUNDLE_VERSION "9"
+        MACOSX_BUNDLE_BUNDLE_VERSION "10"
         XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${KISAK_COMBINED_BUNDLE_ID}"
         XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
         XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME "AppIcon"

@@ -396,7 +396,7 @@ void __cdecl R_SkinStaticModelsCameraForLod(
                         &surfData->drawSurf[region],
                         &surfData->delayedCmdBuf)))
             {
-                if (!R_AllocDrawSurf(&surfData->delayedCmdBuf, drawSurf, &surfData->drawSurf[region], ((count + 1) >> 1) + 3))
+                if (!R_AllocDrawSurf(&surfData->delayedCmdBuf, drawSurf, &surfData->drawSurf[region], R_StaticModelDrawSurfWords(count)))
                     return;
                 R_AddDelayedStaticModelDrawSurf(&surfData->delayedCmdBuf, &surfaces[surfaceIndex], list, count);
             }
@@ -799,7 +799,7 @@ void __cdecl R_SkinStaticModelsShadowForLod(
                         &surfData->drawSurfList,
                         &surfData->delayedCmdBuf)))
             {
-                if (!R_AllocDrawSurf(&surfData->delayedCmdBuf, drawSurf, &surfData->drawSurfList, ((count + 1) >> 1) + 3))
+                if (!R_AllocDrawSurf(&surfData->delayedCmdBuf, drawSurf, &surfData->drawSurfList, R_StaticModelDrawSurfWords(count)))
                     return;
                 R_AddDelayedStaticModelDrawSurf(&surfData->delayedCmdBuf, &surfaces[0][surfaceIndex], list, count);
             }

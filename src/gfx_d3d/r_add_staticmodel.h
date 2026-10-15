@@ -10,6 +10,13 @@ struct GfxSModelDrawSurfData // sizeof=0x18
     GfxDrawSurfList drawSurfList;       // ...
 };
 
+// Count, two pointer words, and packed uint16_t instance IDs. The allocator
+// separately reserves a word for the end marker. Keep all producers in sync.
+constexpr uint32_t R_StaticModelDrawSurfWords(uint32_t count)
+{
+    return 3 + ((count + 1) >> 1);
+}
+
 void __cdecl R_AddDelayedStaticModelDrawSurf(
     GfxDelayedCmdBuf *delayedCmdBuf,
     struct XSurface *xsurf,

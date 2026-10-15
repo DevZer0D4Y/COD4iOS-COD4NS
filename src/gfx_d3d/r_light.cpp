@@ -147,7 +147,7 @@ int __cdecl R_GetPointLightPartitions(const GfxLight **visibleLights)
     for (lightIndex = 0; lightIndex < visibleCount; ++lightIndex)
     {
         visibleLights[lightIndex] = addedLights[lightIndex];
-        scene.visLightShadow[lightIndex - 4].drawSurfCount = 0;
+        scene.visLight[lightIndex].drawSurfCount = 0;
     }
     return visibleCount;
 }
@@ -271,7 +271,10 @@ void __cdecl R_GetBspOmniLightSurfs(const GfxLight *light, int lightIndex, GfxBs
     BspOmniLightCallback bspLightCallback; // [esp+104h] [ebp-38h] BYREF
     uint32_t visLightDrawSurfCount; // [esp+118h] [ebp-24h] BYREF
     uint8_t *surfaceVisData; // [esp+11Ch] [ebp-20h]
-    GfxSurface **surfaces[1]; // [esp+120h] [ebp-1Ch] BYREF
+    // Pointer scratch must not alias the draw list: 1,024 pointers occupy
+    // 8 KiB on arm64, twice the old 32-bit tail allocation.
+    GfxSurface *surfaceStorage[1024];
+    GfxSurface **surfaces[1] = {surfaceStorage};
     float maxs[3]; // [esp+124h] [ebp-18h] BYREF
     GfxDrawSurf *drawSurfs; // [esp+130h] [ebp-Ch]
     GfxDrawSurf *surfaceMaterials; // [esp+134h] [ebp-8h]
@@ -287,7 +290,6 @@ void __cdecl R_GetBspOmniLightSurfs(const GfxLight *light, int lightIndex, GfxBs
     maxs[1] = light->origin[1] + light->radius;
     maxs[2] = light->origin[2] + light->radius;
     drawSurfs = scene.visLight[lightIndex].drawSurfs;
-    surfaces[0] = (GfxSurface **)&drawSurfs[512];
     bspLightCallback.surfaceVisData = surfaceVisData;
     bspLightCallback.position[0] = light->origin[0];
     bspLightCallback.position[1] = light->origin[1];
@@ -305,7 +307,7 @@ void __cdecl R_GetBspOmniLightSurfs(const GfxLight *light, int lightIndex, GfxBs
     if (visLightDrawSurfCount)
     {
         surfData->drawSurfList.current = drawSurfs;
-        surfData->drawSurfList.end = (GfxDrawSurf *)&scene.visLightShadow[lightIndex - 3];
+        surfData->drawSurfList.end = (scene.visLight[lightIndex].drawSurfs + ARRAY_COUNT(scene.visLight[lightIndex].drawSurfs));
         //std::_Sort<int *, int, bool(__cdecl *)(int, int)>(
         //    (const GfxStaticModelDrawInst **)surfaces[0],
         //    (const GfxStaticModelDrawInst **)&surfaces[0][visLightDrawSurfCount],
@@ -327,12 +329,12 @@ void __cdecl R_GetBspOmniLightSurfs(const GfxLight *light, int lightIndex, GfxBs
             R_AddBspDrawSurfs(surfaceMaterials[surfIndex], (uint8_t *)triSurfList, 1u, surfData);
         }
         R_EndCmdBuf(&surfData->delayedCmdBuf);
-        scene.visLightShadow[lightIndex - 4].drawSurfCount = surfData->drawSurfList.current
+        scene.visLight[lightIndex].drawSurfCount = surfData->drawSurfList.current
             - scene.visLight[lightIndex].drawSurfs;
     }
     else
     {
-        scene.visLightShadow[lightIndex - 4].drawSurfCount = 0;
+        scene.visLight[lightIndex].drawSurfCount = 0;
     }
 }
 
@@ -352,7 +354,8 @@ void __cdecl R_GetBspSpotLightSurfs(const GfxLight *light, int lightIndex, GfxBs
     float mins[3]; // [esp+1BCh] [ebp-A4h] BYREF
     BspSpotLightCallback bspLightCallback; // [esp+1C8h] [ebp-98h] BYREF
     uint8_t *surfaceVisData; // [esp+230h] [ebp-30h]
-    GfxSurface **surfaces[2]; // [esp+234h] [ebp-2Ch] BYREF
+    GfxSurface *surfaceStorage[2][1024];
+    GfxSurface **surfaces[2] = {surfaceStorage[0], surfaceStorage[1]};
     float maxs[3]; // [esp+23Ch] [ebp-24h] BYREF
     GfxDrawSurf *drawSurfs[2]; // [esp+248h] [ebp-18h]
     GfxDrawSurf *surfaceMaterials; // [esp+250h] [ebp-10h]
@@ -373,17 +376,15 @@ void __cdecl R_GetBspSpotLightSurfs(const GfxLight *light, int lightIndex, GfxBs
     maxs[2] = light->origin[2] + light->radius;
 
     drawSurfs[0] = scene.visLight[lightIndex].drawSurfs;
-    surfaces[0] = (GfxSurface **)&drawSurfs[0][512];
     drawSurfs[1] = scene.visLightShadow[lightIndex].drawSurfs;
-    surfaces[1] = (GfxSurface **)&drawSurfs[1][512];
     bspLightCallback.surfaceVisData = surfaceVisData;
     R_CalcSpotLightPlanes(light, bspLightCallback.planes);
     R_BoxSurfaces(mins, maxs, allowSurf_1, &bspLightCallback, surfaces, 0x400u, surfCounts, 2u);
     if (surfCounts[0])
     {
-        scene.visLightShadow[lightIndex - 4].drawSurfCount = surfCounts[0];
+        scene.visLight[lightIndex].drawSurfCount = surfCounts[0];
         surfData->drawSurfList.current = drawSurfs[0];
-        surfData->drawSurfList.end = (GfxDrawSurf *)&scene.visLightShadow[lightIndex - 3];
+        surfData->drawSurfList.end = (scene.visLight[lightIndex].drawSurfs + ARRAY_COUNT(scene.visLight[lightIndex].drawSurfs));
         //std::_Sort<int *, int, bool(__cdecl *)(int, int)>(
         //    (const GfxStaticModelDrawInst **)surfaces[0],
         //    (const GfxStaticModelDrawInst **)&surfaces[0][surfCounts[0]],
@@ -405,12 +406,12 @@ void __cdecl R_GetBspSpotLightSurfs(const GfxLight *light, int lightIndex, GfxBs
             R_AddBspDrawSurfs(surfaceMaterials[surfIndex], (uint8_t *)triSurfList, 1u, surfData);
         }
         R_EndCmdBuf(&surfData->delayedCmdBuf);
-        scene.visLightShadow[lightIndex - 4].drawSurfCount = surfData->drawSurfList.current
+        scene.visLight[lightIndex].drawSurfCount = surfData->drawSurfList.current
             - scene.visLight[lightIndex].drawSurfs;
     }
     else
     {
-        scene.visLightShadow[lightIndex - 4].drawSurfCount = 0;
+        scene.visLight[lightIndex].drawSurfCount = 0;
     }
     if (surfCounts[1])
     {
@@ -681,9 +682,11 @@ void __cdecl R_GetStaticModelLightSurfs(const GfxLight **visibleLights, int visi
         maxs[1] = light->origin[1] + light->radius;
         maxs[2] = light->origin[2] + light->radius;
 
-        surfData.drawSurfList.current = &scene.visLight[lightIndex].drawSurfs[scene.visLightShadow[lightIndex - 4].drawSurfCount];
-        surfData.drawSurfList.end = (GfxDrawSurf*)&scene.visLightShadow[lightIndex - 3];
+        surfData.drawSurfList.current = &scene.visLight[lightIndex].drawSurfs[scene.visLight[lightIndex].drawSurfCount];
+        surfData.drawSurfList.end = (scene.visLight[lightIndex].drawSurfs + ARRAY_COUNT(scene.visLight[lightIndex].drawSurfs));
 
+        const bool hasShadowList = light->type == GFX_LIGHT_TYPE_SPOT
+            && lightIndex < ARRAY_COUNT(scene.visLightShadow);
         if (light->type == GFX_LIGHT_TYPE_OMNI)
         {
             g_staticModelLightCallback.position[0] = light->origin[0];
@@ -694,8 +697,11 @@ void __cdecl R_GetStaticModelLightSurfs(const GfxLight **visibleLights, int visi
         }
         else
         {
-            shadowSurfData.drawSurfList.current = &scene.visLightShadow[lightIndex].drawSurfs[scene.visLightShadow[lightIndex].drawSurfCount];
-            shadowSurfData.drawSurfList.end = (scene.visLightShadow[lightIndex].drawSurfs + ARRAY_COUNT(scene.visLightShadow[lightIndex].drawSurfs));
+            if (hasShadowList)
+            {
+                shadowSurfData.drawSurfList.current = &scene.visLightShadow[lightIndex].drawSurfs[scene.visLightShadow[lightIndex].drawSurfCount];
+                shadowSurfData.drawSurfList.end = (scene.visLightShadow[lightIndex].drawSurfs + ARRAY_COUNT(scene.visLightShadow[lightIndex].drawSurfs));
+            }
             R_CalcSpotLightPlanes(light, g_staticModelLightCallback.planes);
             smodelCount = R_BoxStaticModels(mins, maxs, R_AllowStaticModelSpotLight, smodels, 1024);
         }
@@ -723,12 +729,12 @@ void __cdecl R_GetStaticModelLightSurfs(const GfxLight **visibleLights, int visi
                     drawSurf = material->info.drawSurf;
                     //HIDWORD(drawSurf.packed) = ((staticModelId.surfType & 0xF) << 18) | HIDWORD(drawSurf.packed) & 0xFFC3FFFF;
                     drawSurf.fields.surfType = staticModelId.surfType;
-                    if (!R_AllocDrawSurf(&surfData.delayedCmdBuf, drawSurf, &surfData.drawSurfList, 4u))
+                    if (!R_AllocDrawSurf(&surfData.delayedCmdBuf, drawSurf, &surfData.drawSurfList, R_StaticModelDrawSurfWords(1)))
                         break;
                     R_AddDelayedStaticModelDrawSurf(&surfData.delayedCmdBuf, &surfaces[surfaceIndex], (uint8_t*)list, 1u);
-                    if (light->type == GFX_LIGHT_TYPE_SPOT && r_spotLightShadows->current.enabled && r_spotLightSModelShadows->current.enabled)
+                    if (hasShadowList && r_spotLightShadows->current.enabled && r_spotLightSModelShadows->current.enabled)
                     {
-                        if (!R_AllocDrawSurf(&shadowSurfData.delayedCmdBuf, drawSurf, &shadowSurfData.drawSurfList, 3u))
+                        if (!R_AllocDrawSurf(&shadowSurfData.delayedCmdBuf, drawSurf, &shadowSurfData.drawSurfList, R_StaticModelDrawSurfWords(1)))
                             break;
                         R_AddDelayedStaticModelDrawSurf(
                             &shadowSurfData.delayedCmdBuf,
@@ -742,11 +748,14 @@ void __cdecl R_GetStaticModelLightSurfs(const GfxLight **visibleLights, int visi
             }
         }
         R_EndCmdBuf(&surfData.delayedCmdBuf);
-        scene.visLightShadow[lightIndex - 4].drawSurfCount = surfData.drawSurfList.current
+        scene.visLight[lightIndex].drawSurfCount = surfData.drawSurfList.current
             - scene.visLight[lightIndex].drawSurfs;
-        R_EndCmdBuf(&shadowSurfData.delayedCmdBuf);
-        scene.visLightShadow[lightIndex].drawSurfCount = shadowSurfData.drawSurfList.current
-            - scene.visLightShadow[lightIndex].drawSurfs;
+        if (hasShadowList)
+        {
+            R_EndCmdBuf(&shadowSurfData.delayedCmdBuf);
+            scene.visLightShadow[lightIndex].drawSurfCount = shadowSurfData.drawSurfList.current
+                - scene.visLightShadow[lightIndex].drawSurfs;
+        }
     }
 }
 
@@ -852,11 +861,11 @@ void __cdecl R_GetSceneEntLightSurfs(const GfxLight **visibleLights, int visible
                     && (frontEndDataOut->gfxEnts[sceneEnt->gfxEntIndex].renderFxFlags & 8) == 0)
                 {
                 LABEL_29:
-                    visLight = &scene.visLightShadow[lightIndex - 4];
-                    lastDrawSurf = (GfxDrawSurf *)&visLight[1];
+                    visLight = &scene.visLight[lightIndex];
+                    lastDrawSurf = (visLight->drawSurfs + ARRAY_COUNT(visLight->drawSurfs));
                     visLightDrawSurfCount = visLight->drawSurfCount;
                     drawSurf = &visLight->drawSurfs[visLightDrawSurfCount];
-                    newDrawSurf = R_AddDObjSurfaces(sceneEnt, TECHNIQUE_LIGHT_OMNI, drawSurf, (GfxDrawSurf *)&visLight[1]);
+                    newDrawSurf = R_AddDObjSurfaces(sceneEnt, TECHNIQUE_LIGHT_OMNI, drawSurf, (visLight->drawSurfs + ARRAY_COUNT(visLight->drawSurfs)));
                     visLight->drawSurfCount += newDrawSurf - drawSurf;
                     if (light->type == GFX_LIGHT_TYPE_SPOT
                         && r_spotLightShadows->current.enabled
@@ -872,10 +881,10 @@ void __cdecl R_GetSceneEntLightSurfs(const GfxLight **visibleLights, int visible
                                 lightIndex,
                                 1);
                         visLightShadow = &scene.visLightShadow[lightIndex];
-                        lastDrawSurf = (GfxDrawSurf *)&visLightShadow[1];
+                        lastDrawSurf = (visLightShadow->drawSurfs + ARRAY_COUNT(visLightShadow->drawSurfs));
                         visLightShadowDrawSurfCount = visLightShadow->drawSurfCount;
                         drawSurf = &visLightShadow->drawSurfs[visLightShadowDrawSurfCount];
-                        newDrawSurf = R_AddDObjSurfaces(sceneEnt, TECHNIQUE_LIGHT_OMNI, drawSurf, (GfxDrawSurf *)&visLightShadow[1]);
+                        newDrawSurf = R_AddDObjSurfaces(sceneEnt, TECHNIQUE_LIGHT_OMNI, drawSurf, (visLightShadow->drawSurfs + ARRAY_COUNT(visLightShadow->drawSurfs)));
                         visLightShadow->drawSurfCount += newDrawSurf - drawSurf;
                     }
                 }
@@ -917,8 +926,8 @@ void __cdecl R_GetSceneEntLightSurfs(const GfxLight **visibleLights, int visible
             if (distSq > radius * radius)
                 goto LABEL_43;
         LABEL_55:
-            visLight = &scene.visLightShadow[lightIndex - 4];
-            lastDrawSurf = (GfxDrawSurf *)&visLight[1];
+            visLight = &scene.visLight[lightIndex];
+            lastDrawSurf = (visLight->drawSurfs + ARRAY_COUNT(visLight->drawSurfs));
             visLightDrawSurfCount = visLight->drawSurfCount;
             drawSurf = &visLight->drawSurfs[visLightDrawSurfCount];
             newDrawSurf = R_AddXModelSurfaces(
@@ -926,7 +935,7 @@ void __cdecl R_GetSceneEntLightSurfs(const GfxLight **visibleLights, int visible
                 sceneModel->model,
                 TECHNIQUE_LIGHT_OMNI,
                 drawSurf,
-                (GfxDrawSurf *)&visLight[1]);
+                (visLight->drawSurfs + ARRAY_COUNT(visLight->drawSurfs)));
             visLight->drawSurfCount += newDrawSurf - drawSurf;
             if (light->type == GFX_LIGHT_TYPE_SPOT && r_spotLightShadows->current.enabled && r_spotLightEntityShadows->current.enabled)
             {
@@ -939,7 +948,7 @@ void __cdecl R_GetSceneEntLightSurfs(const GfxLight **visibleLights, int visible
                         lightIndex,
                         1);
                 visLightShadow = &scene.visLightShadow[lightIndex];
-                lastDrawSurf = (GfxDrawSurf *)&visLightShadow[1];
+                lastDrawSurf = (visLightShadow->drawSurfs + ARRAY_COUNT(visLightShadow->drawSurfs));
                 visLightShadowDrawSurfCount = visLightShadow->drawSurfCount;
                 drawSurf = &visLightShadow->drawSurfs[visLightShadowDrawSurfCount];
                 newDrawSurf = R_AddXModelSurfaces(
@@ -947,7 +956,7 @@ void __cdecl R_GetSceneEntLightSurfs(const GfxLight **visibleLights, int visible
                     sceneModel->model,
                     TECHNIQUE_LIGHT_OMNI,
                     drawSurf,
-                    (GfxDrawSurf *)&visLightShadow[1]);
+                    (visLightShadow->drawSurfs + ARRAY_COUNT(visLightShadow->drawSurfs)));
                 visLightShadow->drawSurfCount += newDrawSurf - drawSurf;
             }
             goto LABEL_43;
@@ -990,8 +999,8 @@ void __cdecl R_GetSceneEntLightSurfs(const GfxLight **visibleLights, int visible
             if (distSq > radius * radius)
                 goto LABEL_68;
         LABEL_80:
-            visLight = &scene.visLightShadow[lightIndex - 4];
-            lastDrawSurf = (GfxDrawSurf *)&visLight[1];
+            visLight = &scene.visLight[lightIndex];
+            lastDrawSurf = (visLight->drawSurfs + ARRAY_COUNT(visLight->drawSurfs));
             visLightDrawSurfCount = visLight->drawSurfCount;
             drawSurf = &visLight->drawSurfs[visLightDrawSurfCount];
             dynEntDef = DynEnt_GetEntityDef(dynEntIndex, DYNENT_DRAW_MODEL);
@@ -1013,7 +1022,7 @@ void __cdecl R_GetSceneEntLightSurfs(const GfxLight **visibleLights, int visible
                         lightIndex,
                         1);
                 visLightShadow = &scene.visLightShadow[lightIndex];
-                lastDrawSurf = (GfxDrawSurf *)&visLightShadow[1];
+                lastDrawSurf = (visLightShadow->drawSurfs + ARRAY_COUNT(visLightShadow->drawSurfs));
                 visLightShadowDrawSurfCount = visLightShadow->drawSurfCount;
                 drawSurf = &visLightShadow->drawSurfs[visLightShadowDrawSurfCount];
                 dynEntDef = DynEnt_GetEntityDef(dynEntIndex, DYNENT_DRAW_MODEL);
@@ -1063,8 +1072,8 @@ void __cdecl R_GetSceneEntLightSurfs(const GfxLight **visibleLights, int visible
             if (distSq > (double)v3)
                 goto LABEL_93;
         LABEL_105:
-            visLight = &scene.visLightShadow[lightIndex - 4];
-            lastDrawSurf = (GfxDrawSurf *)&visLight[1];
+            visLight = &scene.visLight[lightIndex];
+            lastDrawSurf = (visLight->drawSurfs + ARRAY_COUNT(visLight->drawSurfs));
             visLightDrawSurfCount = visLight->drawSurfCount;
             drawSurf = &visLight->drawSurfs[visLightDrawSurfCount];
             newDrawSurf = R_AddBModelSurfaces(
@@ -1072,7 +1081,7 @@ void __cdecl R_GetSceneEntLightSurfs(const GfxLight **visibleLights, int visible
                 sceneBrush->bmodel,
                 TECHNIQUE_LIGHT_OMNI,
                 drawSurf,
-                (GfxDrawSurf *)&visLight[1]);
+                (visLight->drawSurfs + ARRAY_COUNT(visLight->drawSurfs)));
             visLight->drawSurfCount += newDrawSurf - drawSurf;
             if (light->type == GFX_LIGHT_TYPE_SPOT && r_spotLightShadows->current.enabled && r_spotLightEntityShadows->current.enabled)
             {
@@ -1085,7 +1094,7 @@ void __cdecl R_GetSceneEntLightSurfs(const GfxLight **visibleLights, int visible
                         lightIndex,
                         1);
                 visLightShadow = &scene.visLightShadow[lightIndex];
-                lastDrawSurf = (GfxDrawSurf *)&visLightShadow[1];
+                lastDrawSurf = (visLightShadow->drawSurfs + ARRAY_COUNT(visLightShadow->drawSurfs));
                 visLightShadowDrawSurfCount = visLightShadow->drawSurfCount;
                 drawSurf = &visLightShadow->drawSurfs[visLightShadowDrawSurfCount];
                 newDrawSurf = R_AddBModelSurfaces(
@@ -1093,7 +1102,7 @@ void __cdecl R_GetSceneEntLightSurfs(const GfxLight **visibleLights, int visible
                     sceneBrush->bmodel,
                     TECHNIQUE_LIGHT_OMNI,
                     drawSurf,
-                    (GfxDrawSurf *)&visLightShadow[1]);
+                    (visLightShadow->drawSurfs + ARRAY_COUNT(visLightShadow->drawSurfs)));
                 visLightShadow->drawSurfCount += newDrawSurf - drawSurf;
             }
             goto LABEL_93;
@@ -1136,8 +1145,8 @@ void __cdecl R_GetSceneEntLightSurfs(const GfxLight **visibleLights, int visible
             if (distSq > (double)v2)
                 goto LABEL_118;
         LABEL_130:
-            visLight = &scene.visLightShadow[lightIndex - 4];
-            lastDrawSurf = (GfxDrawSurf *)&visLight[1];
+            visLight = &scene.visLight[lightIndex];
+            lastDrawSurf = (visLight->drawSurfs + ARRAY_COUNT(visLight->drawSurfs));
             visLightDrawSurfCount = visLight->drawSurfCount;
             drawSurf = &visLight->drawSurfs[visLightDrawSurfCount];
             newDrawSurf = R_AddBModelSurfaces(
@@ -1145,7 +1154,7 @@ void __cdecl R_GetSceneEntLightSurfs(const GfxLight **visibleLights, int visible
                 bmodel,
                 TECHNIQUE_LIGHT_OMNI,
                 drawSurf,
-                (GfxDrawSurf *)&visLight[1]);
+                (visLight->drawSurfs + ARRAY_COUNT(visLight->drawSurfs)));
             visLight->drawSurfCount += newDrawSurf - drawSurf;
             if (light->type == GFX_LIGHT_TYPE_SPOT && r_spotLightShadows->current.enabled && r_spotLightEntityShadows->current.enabled)
             {
@@ -1158,7 +1167,7 @@ void __cdecl R_GetSceneEntLightSurfs(const GfxLight **visibleLights, int visible
                         lightIndex,
                         1);
                 visLightShadow = &scene.visLightShadow[lightIndex];
-                lastDrawSurf = (GfxDrawSurf *)&visLightShadow[1];
+                lastDrawSurf = (visLightShadow->drawSurfs + ARRAY_COUNT(visLightShadow->drawSurfs));
                 visLightShadowDrawSurfCount = visLightShadow->drawSurfCount;
                 drawSurf = &visLightShadow->drawSurfs[visLightShadowDrawSurfCount];
                 newDrawSurf = R_AddBModelSurfaces(
@@ -1166,7 +1175,7 @@ void __cdecl R_GetSceneEntLightSurfs(const GfxLight **visibleLights, int visible
                     bmodel,
                     TECHNIQUE_LIGHT_OMNI,
                     drawSurf,
-                    (GfxDrawSurf *)&visLightShadow[1]);
+                    (visLightShadow->drawSurfs + ARRAY_COUNT(visLightShadow->drawSurfs)));
                 visLightShadow->drawSurfCount += newDrawSurf - drawSurf;
             }
             goto LABEL_118;
@@ -1386,7 +1395,7 @@ int __cdecl R_EmitPointLightPartitionSurfs(
     for (lightIndex = 0; lightIndex < visibleCount; ++lightIndex)
     {
         light = visibleLights[lightIndex];
-        lightDrawSurfCount = scene.visLightShadow[lightIndex - 4].drawSurfCount;
+        lightDrawSurfCount = scene.visLight[lightIndex].drawSurfCount;
         R_ReverseSortDrawSurfs(scene.visLight[lightIndex].drawSurfs, lightDrawSurfCount);
         partition = &partitions[partitionCount];
         R_InitDrawSurfListInfo(&partition->info);

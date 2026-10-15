@@ -48,7 +48,7 @@ inline void Begin(const char *root,const char *mode) {
     eventFD=open((directory+"/campaign-events.txt").c_str(),O_WRONLY|O_CREAT|O_APPEND,0600);
     crashFD=open((directory+"/native-crash.txt").c_str(),O_WRONLY|O_CREAT|O_APPEND,0600);
     Dl_info image{};dladdr(reinterpret_cast<const void *>(&Begin),&image);
-    char line[160];const int n=snprintf(line,sizeof(line),"\nsession build=9 mode=%s time=%lld imageBase=%p\n",mode,(long long)time(nullptr),image.dli_fbase);
+    char line[160];const int n=snprintf(line,sizeof(line),"\nsession build=10 mode=%s time=%lld imageBase=%p\n",mode,(long long)time(nullptr),image.dli_fbase);
     if(eventFD>=0)write(eventFD,line,n);
     if(crashFD>=0){
         write(crashFD,line,n);
