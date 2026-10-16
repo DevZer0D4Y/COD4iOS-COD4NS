@@ -1,4 +1,5 @@
 #pragma once
+#include "../BuildVersion.h"
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -26,13 +27,20 @@ inline void Literal(char *&out,const char *s){while(*s)*out++=*s++;}
 inline void FatalSignal(int signal,siginfo_t *info,void *context) {
     // Only async-signal-safe operations. Preserve the fatal signal for the OS
     // crash reporter; do not try to save engine state from a signal handler.
-    char line[192];char *out=line;Literal(out,"signal=");Hex(out,signal);
+    char line[1280];char *out=line;Literal(out,"signal=");Hex(out,signal);
     Literal(out," fault=");Hex(out,reinterpret_cast<uintptr_t>(info?info->si_addr:nullptr));
 #if defined(__APPLE__) && defined(__aarch64__)
     auto *state=static_cast<ucontext_t *>(context);
     if(state && state->uc_mcontext){
         Literal(out," pc=");Hex(out,state->uc_mcontext->__ss.__pc);
         Literal(out," lr=");Hex(out,state->uc_mcontext->__ss.__lr);
+        Literal(out," sp=");Hex(out,state->uc_mcontext->__ss.__sp);
+        Literal(out," fp=");Hex(out,state->uc_mcontext->__ss.__fp);
+        for(int reg=0;reg<29;++reg){
+            Literal(out," x");if(reg>=10)*out++=char('0'+reg/10);
+            *out++=char('0'+reg%10);*out++='=';
+            Hex(out,state->uc_mcontext->__ss.__x[reg]);
+        }
     }
 #else
     (void)context;
@@ -48,7 +56,7 @@ inline void Begin(const char *root,const char *mode) {
     eventFD=open((directory+"/campaign-events.txt").c_str(),O_WRONLY|O_CREAT|O_APPEND,0600);
     crashFD=open((directory+"/native-crash.txt").c_str(),O_WRONLY|O_CREAT|O_APPEND,0600);
     Dl_info image{};dladdr(reinterpret_cast<const void *>(&Begin),&image);
-    char line[160];const int n=snprintf(line,sizeof(line),"\nsession build=11 mode=%s time=%lld imageBase=%p\n",mode,(long long)time(nullptr),image.dli_fbase);
+    char line[160];const int n=snprintf(line,sizeof(line),"\nsession build=%d mode=%s time=%lld imageBase=%p\n",KISAK_IOS_RELEASE_BUILD,mode,(long long)time(nullptr),image.dli_fbase);
     if(eventFD>=0)write(eventFD,line,n);
     if(crashFD>=0){
         write(crashFD,line,n);

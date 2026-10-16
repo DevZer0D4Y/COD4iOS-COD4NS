@@ -71,6 +71,10 @@ execute_process(
 if(NOT KISAK_BUILD_NUMBER)
     set(KISAK_BUILD_NUMBER 0)
 endif()
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS" AND DEFINED KISAK_IOS_RELEASE_BUILD)
+    # A Git revision count is not the installed IPA build number.
+    set(KISAK_BUILD_NUMBER "${KISAK_IOS_RELEASE_BUILD}")
+endif()
 set(KISAK_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(CONFIGURE OUTPUT "${KISAK_GENERATED_DIR}/buildnumber.h" CONTENT "#pragma once
 #define BUILD_NUMBER ${KISAK_BUILD_NUMBER}

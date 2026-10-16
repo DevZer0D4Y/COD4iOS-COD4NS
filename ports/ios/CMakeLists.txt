@@ -1,3 +1,7 @@
+file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/BuildVersion.h" KISAK_IOS_BUILD_LINE
+    REGEX "^#define KISAK_IOS_RELEASE_BUILD [0-9]+$")
+string(REGEX REPLACE ".* ([0-9]+)$" "\\1" KISAK_IOS_RELEASE_BUILD "${KISAK_IOS_BUILD_LINE}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/BuildVersion.h")
 add_subdirectory(core)
 add_subdirectory(assets)
 add_subdirectory(save)
@@ -29,6 +33,14 @@ if(BUILD_TESTING AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     target_compile_options(kisakcod_resume_tests PRIVATE -UNDEBUG)
     add_test(NAME campaign_resume_recovery COMMAND kisakcod_resume_tests)
     if(APPLE)
+        add_executable(kisakcod_metal_fog_tests engine/tests/MetalFogMaskTests.mm
+            d3d9/metal/dx9_msl_translator.cpp)
+        target_compile_features(kisakcod_metal_fog_tests PRIVATE cxx_std_20)
+        target_compile_options(kisakcod_metal_fog_tests PRIVATE -UNDEBUG
+            $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+        target_link_libraries(kisakcod_metal_fog_tests PRIVATE "-framework Metal" "-framework Foundation")
+        add_test(NAME metal_fog_zero_mask COMMAND kisakcod_metal_fog_tests)
+        set_tests_properties(metal_fog_zero_mask PROPERTIES SKIP_RETURN_CODE 77)
         add_executable(kisakcod_metal_position_tests engine/tests/MetalPositionInvarianceTests.mm
             d3d9/metal/dx9_msl_translator.cpp)
         target_compile_features(kisakcod_metal_position_tests PRIVATE cxx_std_20)
@@ -171,7 +183,7 @@ if(KISAK_BUILD_ENGINE AND KISAK_BUILD_MP AND KISAK_BUILD_COMBINED)
         MACOSX_BUNDLE_GUI_IDENTIFIER "${KISAK_COMBINED_BUNDLE_ID}"
         MACOSX_BUNDLE_BUNDLE_NAME "COD4iOS"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0.4"
-        MACOSX_BUNDLE_BUNDLE_VERSION "11"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${KISAK_IOS_RELEASE_BUILD}"
         XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${KISAK_COMBINED_BUNDLE_ID}"
         XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
         XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME "AppIcon"
