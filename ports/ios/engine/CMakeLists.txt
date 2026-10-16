@@ -10,6 +10,14 @@ set(SRC_DIR "${KISAK_ROOT}/src")
 set(DEPS_DIR "${KISAK_ROOT}/deps")
 set(SCRIPTS_DIR "${KISAK_ROOT}/scripts")
 
+# Keep the clean iOS package free of the upper-right debug HUD even when an
+# existing archived config enables cg_drawFPS or com_statmon. Both engines use it.
+option(KISAK_IOS_PERFORMANCE_STATS "Show the iOS upper-right performance HUD" OFF)
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS" AND NOT KISAK_IOS_PERFORMANCE_STATS)
+    set_source_files_properties("${SRC_DIR}/cgame/cg_draw_debug.cpp" PROPERTIES
+        COMPILE_DEFINITIONS KISAK_IOS_CLEAN_HUD=1)
+endif()
+
 include("${SCRIPTS_DIR}/common_files.cmake")
 include("${SCRIPTS_DIR}/sp/sp_files.cmake")
 

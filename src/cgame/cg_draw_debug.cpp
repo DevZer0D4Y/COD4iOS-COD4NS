@@ -332,6 +332,10 @@ void DrawReplayTime(const ScreenPlacement *scrPlace, float posY)
 
 void __cdecl CG_DrawUpperRightDebugInfo(int32_t localClientNum)
 {
+#if defined(KISAK_IOS_CLEAN_HUD)
+    // Clean iOS packages hide this HUD in SP and MP without changing saved dvars.
+    return;
+#endif
 #ifdef KISAK_MP
     meminfo_t meminfo; // [esp+8h] [ebp-A8h] BYREF
     float y; // [esp+ACh] [ebp-4h]
