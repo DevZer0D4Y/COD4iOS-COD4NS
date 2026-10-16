@@ -17,6 +17,7 @@
 #include <string>
 #include <unordered_map>
 #include "ShaderConstantCache.h"
+#include "ShaderCompileOptions.h"
 #include <unordered_set>
 #include <vector>
 
@@ -700,8 +701,7 @@ id<MTLFunction> ShaderFunction(Shader *shader, uint32_t depthSamplerMask, uint32
         }
     }
     NSError *error = nil;
-    MTLCompileOptions *compile = [MTLCompileOptions new];
-    compile.languageVersion = MTLLanguageVersion2_4;
+    MTLCompileOptions *compile = ShaderCompileOptions();
     id<MTLLibrary> library = [g->device newLibraryWithSource:[NSString stringWithUTF8String:translated.source.c_str()] options:compile error:&error];
     id<MTLFunction> function = [library newFunctionWithName:@"kisak_main"];
     if (!function)

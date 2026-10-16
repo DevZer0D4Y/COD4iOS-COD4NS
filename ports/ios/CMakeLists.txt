@@ -29,6 +29,14 @@ if(BUILD_TESTING AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     target_compile_options(kisakcod_resume_tests PRIVATE -UNDEBUG)
     add_test(NAME campaign_resume_recovery COMMAND kisakcod_resume_tests)
     if(APPLE)
+        add_executable(kisakcod_metal_position_tests engine/tests/MetalPositionInvarianceTests.mm
+            d3d9/metal/dx9_msl_translator.cpp)
+        target_compile_features(kisakcod_metal_position_tests PRIVATE cxx_std_20)
+        target_compile_options(kisakcod_metal_position_tests PRIVATE -UNDEBUG
+            $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+        target_link_libraries(kisakcod_metal_position_tests PRIVATE "-framework Metal" "-framework Foundation")
+        add_test(NAME metal_position_invariance COMMAND kisakcod_metal_position_tests)
+        set_tests_properties(metal_position_invariance PROPERTIES SKIP_RETURN_CODE 77)
         add_test(NAME campaign_mission_dvars COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/engine/tests/MissionDvarTests.py)
         add_test(NAME campaign_profile_progress COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/engine/tests/CampaignProfileTests.py)
         add_test(NAME metal_upload_ordering COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/engine/tests/MetalUploadOrderingTests.py)
@@ -163,7 +171,7 @@ if(KISAK_BUILD_ENGINE AND KISAK_BUILD_MP AND KISAK_BUILD_COMBINED)
         MACOSX_BUNDLE_GUI_IDENTIFIER "${KISAK_COMBINED_BUNDLE_ID}"
         MACOSX_BUNDLE_BUNDLE_NAME "COD4iOS"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0.4"
-        MACOSX_BUNDLE_BUNDLE_VERSION "10"
+        MACOSX_BUNDLE_BUNDLE_VERSION "11"
         XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${KISAK_COMBINED_BUNDLE_ID}"
         XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
         XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME "AppIcon"

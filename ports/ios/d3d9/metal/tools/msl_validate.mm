@@ -12,6 +12,7 @@
 #import <Metal/Metal.h>
 
 #include "../dx9_msl_translator.h"
+#include "../ShaderCompileOptions.h"
 
 #include <cstdio>
 #include <vector>
@@ -37,8 +38,7 @@ int main(int argc, const char *argv[])
             fprintf(stderr, "no Metal device\n");
             return 1;
         }
-        MTLCompileOptions *options = [MTLCompileOptions new];
-        options.languageVersion = MTLLanguageVersion2_4;
+        MTLCompileOptions *options = kisak::metal::ShaderCompileOptions();
 
         NSArray<NSString *> *names = [[files contentsOfDirectoryAtPath:inputDir error:nil] sortedArrayUsingSelector:@selector(compare:)];
         int total = 0, translateFailures = 0, compileFailures = 0;

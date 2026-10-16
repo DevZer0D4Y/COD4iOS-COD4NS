@@ -619,7 +619,7 @@ private:
         inputStruct += "};\n\n";
 
         const ShaderSemantic *position = nullptr;
-        std::string outputStruct = "struct VertexOut\n{\n    float4 position [[position]];\n";
+        std::string outputStruct = "struct VertexOut\n{\n    float4 position [[position, invariant]];\n";
         for (const ShaderSemantic &output : m_out.outputs)
         {
             if (output.usage == kUsagePosition && output.index == 0)
