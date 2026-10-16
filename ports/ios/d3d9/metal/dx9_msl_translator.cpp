@@ -427,12 +427,12 @@ private:
         return result + ")";
     }
 
-    std::string Product(uint32_t dest, const std::string &a, const std::string &b)
+    std::string Product(const std::string &a, const std::string &b)
     {
-        if (m_emittingMetal && m_out.pixel && RegisterType(dest) == RegColorOut)
+        if (m_emittingMetal && m_out.pixel)
         {
-            m_outputZeroMultiply = true;
-            return "kisak_output_product(" + a + ", " + b + ")";
+            m_pixelZeroMultiply = true;
+            return "kisak_dx9_product(" + a + ", " + b + ")";
         }
         return a + " * " + b;
     }
@@ -452,8 +452,8 @@ private:
         case OpMov: Assign(dest, src(1)); return true;
         case OpAdd: Assign(dest, src(1) + " + " + src(2)); return true;
         case OpSub: Assign(dest, src(1) + " - " + src(2)); return true;
-        case OpMul: Assign(dest, Product(dest, src(1), src(2))); return true;
-        case OpMad: Assign(dest, Product(dest, src(1), src(2)) + " + " + src(3)); return true;
+        case OpMul: Assign(dest, Product(src(1), src(2))); return true;
+        case OpMad: Assign(dest, Product(src(1), src(2)) + " + " + src(3)); return true;
         case OpRcp: Assign(dest, "float4(1.0 / " + src(1) + ".x)"); return true;
         case OpRsq: Assign(dest, "float4(rsqrt(abs(" + src(1) + ".x)))"); return true;
         case OpDp3: Assign(dest, "float4(dot(" + src(1) + ".xyz, " + src(2) + ".xyz))"); return true;
@@ -689,14 +689,14 @@ private:
         if (!EmitBody())
             return false;
         std::string &s = m_out.source;
-        if (m_outputZeroMultiply)
+        if (m_pixelZeroMultiply)
         {
             // Legacy D3D9 zero masks must suppress unused NaN/Inf lighting.
             // COD4's final fog MAD relies on this when its visibility is zero.
             // Mask operand bits before arithmetic so fast-math cannot turn a
-            // floating-point post-select back into 0 * NaN. Limit this work to
-            // output MUL/MAD instructions; keep ordinary shader math unchanged.
-            s += "float4 kisak_output_product(float4 a, float4 b)\n{\n";
+            // floating-point post-select back into 0 * NaN. Fog also runs in
+            // temporary registers before MOV/CMP reaches the color output.
+            s += "float4 kisak_dx9_product(float4 a, float4 b)\n{\n";
             s += "    const uint4 ab = as_type<uint4>(a), bb = as_type<uint4>(b);\n";
             s += "    const float4 az = as_type<float4>(select(ab, uint4(0), (bb & uint4(0x7fffffffu)) == uint4(0)));\n";
             s += "    const float4 bz = as_type<float4>(select(bb, uint4(0), (ab & uint4(0x7fffffffu)) == uint4(0)));\n";
@@ -777,7 +777,7 @@ private:
     std::set<uint32_t> m_rastOutputs;
     std::set<uint32_t> m_attrOutputs;
     bool m_emittingMetal = false;
-    bool m_outputZeroMultiply = false;
+    bool m_pixelZeroMultiply = false;
     uint32_t m_maxTemp = 0;
     uint32_t m_maxInput = 0;
     uint32_t m_maxOutput = 0;

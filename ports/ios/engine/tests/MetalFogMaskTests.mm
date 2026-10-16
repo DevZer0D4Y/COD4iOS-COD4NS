@@ -10,11 +10,12 @@
 
 // COD4's fog shader finishes with MAD color, fogWeight, lighting, fogColor.
 // Unused lighting lanes may contain NaN/Inf; a zero fog weight must mask them.
-static kisak::metal::TranslatedShader PixelShader(bool mad)
+static kisak::metal::TranslatedShader PixelShader(bool mad, bool temporary)
 {
     std::vector<uint32_t> words{0xffff0300, mad ? 0x04000004u : 0x03000005u,
-        0x800f0800, 0xa0e40000, 0xa0e40001};
+        temporary ? 0x800f0000u : 0x800f0800u, 0xa0e40000, 0xa0e40001};
     if(mad)words.push_back(0xa0e40002);
+    if(temporary)words.insert(words.end(), {0x02000001u,0x800f0800u,0x80e40000u});
     words.push_back(0xffff);
     kisak::metal::TranslatedShader shader;
     assert(kisak::metal::TranslateShader(words.data(),words.size(),{},shader));
@@ -36,8 +37,8 @@ int main()
         td.storageMode=MTLStorageModeShared;td.usage=MTLTextureUsageRenderTarget;
         auto target=[device newTextureWithDescriptor:td];assert(target);
         unsigned failures=0,cases=0;
-        for(bool mad:{false,true}) {
-            const auto shader=PixelShader(mad);
+        for(bool temporary:{false,true})for(bool mad:{false,true}) {
+            const auto shader=PixelShader(mad,temporary);
             auto ps=[device newLibraryWithSource:[NSString stringWithUTF8String:shader.source.c_str()] options:options error:&error];
             if(!ps){fprintf(stderr,"%s\n",error.localizedDescription.UTF8String);return 2;}
             auto pd=[MTLRenderPipelineDescriptor new];pd.vertexFunction=vertex;

@@ -225,13 +225,14 @@ void __cdecl Path_MakeArcBadPlace(unsigned int name, int duration, int teamflags
 
 void __cdecl Path_MakeBrushBadPlace(unsigned int name, int duration, int teamflags, gentity_s *volume)
 {
-    badplace_parms_t v9; // [sp+50h] [-50h] BYREF
+    badplace_parms_t v9{}; // Initialize the complete union copied into the bad place.
 
     if (!volume)
         MyAssertHandler("c:\\trees\\cod3\\cod3src\\src\\game\\actor_badplace.cpp", 215, 0, "%s", "volume");
     v9.brush.volume = volume;
     volume->flags |= FL_BADPLACE_VOLUME;
-    v9.arc.origin[1] = RadiusFromBounds2D(volume->r.mins, volume->r.maxs);
+    // The arc alias at byte 4 overlaps the upper half of volume on 64-bit.
+    v9.brush.radius = RadiusFromBounds2D(volume->r.mins, volume->r.maxs);
     Path_MakeBadPlace(name, duration, teamflags, 2, &v9);
 }
 
